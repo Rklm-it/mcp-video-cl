@@ -45,18 +45,33 @@ Caddy :443  ──►  video-mcp :8000
                    └─ /data/cache       → кэш (TTL 48 ч, лимит 15 ГБ)
 ```
 
-## Установка на VPS
+## Установка на VPS — одной командой
 
-Что нужно:
-- VPS с Linux, Docker и Docker Compose;
-- минимум 2 ГБ RAM (для Whisper `small` лучше 4 ГБ);
-- 20+ ГБ диска;
-- домен или поддомен с A-записью на IP сервера. HTTPS обязателен: claude.ai подключается
-  только к HTTPS-серверам.
+Нужен чистый VPS с Ubuntu или Debian: от 2 ГБ RAM и 20 ГБ диска. Зайдите на него по SSH и выполните:
 
 ```bash
-git clone https://github.com/rklm-it/mcp-video-cl.git video-mcp
-cd video-mcp
+curl -fsSL https://raw.githubusercontent.com/Rklm-it/mcp-video-cl/HEAD/install.sh | sudo bash
+```
+
+Скрипт спросит только домен. Если домена нет, нажмите Enter: будет использован бесплатный адрес
+вида `1-2-3-4.sslip.io` по IP сервера, HTTPS-сертификат выдаётся на него автоматически. Дальше скрипт сам:
+- поставит Docker;
+- скачает код в `/opt/video-mcp`;
+- сгенерирует секретный токен;
+- подберёт настройки Whisper под объём памяти;
+- откроет порты 80/443;
+- соберёт и запустит сервер с HTTPS.
+
+В конце он выведет готовую ссылку для Claude. Она же сохраняется в `/opt/video-mcp/CONNECT.txt`.
+
+**Обновление** — та же команда ещё раз. Токен и настройки сохраняются.
+
+<details>
+<summary>Установка вручную</summary>
+
+```bash
+git clone https://github.com/Rklm-it/mcp-video-cl.git /opt/video-mcp
+cd /opt/video-mcp
 cp .env.example .env
 nano .env        # DOMAIN=video.ваш-домен.ru, VIDEO_MCP_TOKEN=$(openssl rand -hex 32)
 mkdir -p data/videos secrets
@@ -64,8 +79,8 @@ docker compose up -d --build
 docker compose logs -f video-mcp
 ```
 
-Проверка: `curl https://video.ваш-домен.ru/health` должен вернуть `ok`.
-Caddy сам получит сертификат Let's Encrypt, для этого нужны открытые порты 80 и 443.
+Проверка: `curl https://ДОМЕН/health` должен вернуть `ok`. Для сертификата нужны открытые порты 80 и 443.
+</details>
 
 > Если на сервере уже стоит nginx, закомментируйте сервис `caddy`, откройте
 > `ports: ["127.0.0.1:8000:8000"]` у `video-mcp` и добавьте в nginx:
@@ -116,7 +131,7 @@ YouTube часто не отдаёт видео на IP дата-центров 
 2. **Cookies.** Лучше взять запасной Google-аккаунт: активный аккаунт с сервера YouTube может ограничить.
    Войдите в YouTube в приватном окне браузера, экспортируйте cookies расширением
    «Get cookies.txt LOCALLY» в формате Netscape и закройте окно. Файл положите в
-   `secrets/cookies.txt` и добавьте в `.env` строку `YTDLP_COOKIES=/secrets/cookies.txt`.
+   `/opt/video-mcp/secrets/cookies.txt` и снова запустите команду установки: она подхватит файл сама.
    Подробности: [инструкция yt-dlp](https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies).
 3. **PO-токены.** `docker compose --profile pot up -d` и `YTDLP_POT_PROVIDER_URL=http://pot-provider:4416` в `.env`.
 4. **Прокси.** Резидентный или мобильный: `YTDLP_PROXY=socks5://user:pass@host:port`.
@@ -128,7 +143,7 @@ YouTube часто не отдаёт видео на IP дата-центров 
 
 Загрузите файл в папку `data/videos` на сервере:
 ```bash
-scp lecture.mp4 user@vps:~/video-mcp/data/videos/
+scp lecture.mp4 root@vps:/opt/video-mcp/data/videos/
 ```
 После этого пишите Claude: *«Разбери lecture.mp4»*. Субтитры сервер берёт из файла рядом
 (`lecture.srt` / `lecture.vtt`) или из самого контейнера. Если их нет, речь распознаёт Whisper.
@@ -173,10 +188,11 @@ scp lecture.mp4 user@vps:~/video-mcp/data/videos/
 ## Обслуживание
 
 ```bash
+cd /opt/video-mcp
 docker compose logs -f video-mcp      # логи
 docker compose restart video-mcp      # перезапуск + обновление yt-dlp
-git pull && docker compose up -d --build
 ```
+Обновление всего сервера — снова запустите команду установки.
 
 ## Разработка
 
