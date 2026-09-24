@@ -1,0 +1,10 @@
+{$DOMAIN} {
+	reverse_proxy video-mcp:8000 {
+		# stream progress events (SSE) immediately
+		flush_interval -1
+		transport http {
+			read_timeout 30m
+			write_timeout 30m
+		}
+	}
+}

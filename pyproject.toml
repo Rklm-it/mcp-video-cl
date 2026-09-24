@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "video-mcp"
+version = "0.1.0"
+description = "Self-hosted MCP server that lets Claude watch videos: key frames + transcript from YouTube and other sites"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp[cli]>=1.25,<2",
+    "yt-dlp[default,deno]>=2026.1.1",
+    "pillow>=10",
+    "uvicorn>=0.30",
+]
+
+[project.optional-dependencies]
+whisper = ["faster-whisper>=1.1"]
+dev = ["pytest>=8", "pytest-asyncio>=0.24", "httpx>=0.27"]
+
+[project.scripts]
+video-mcp = "video_mcp.server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

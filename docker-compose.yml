@@ -1,0 +1,44 @@
+services:
+  video-mcp:
+    build:
+      context: .
+      args:
+        WITH_WHISPER: ${WITH_WHISPER:-1}
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/data
+      - ./secrets:/secrets:ro
+    expose:
+      - "8000"
+    # Uncomment to reach the server directly without Caddy (e.g. behind your own nginx):
+    # ports:
+    #   - "127.0.0.1:8000:8000"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - video-mcp
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+  # Optional: PO-token provider that helps when YouTube flags the VPS as a bot.
+  # Start with: docker compose --profile pot up -d  and set YTDLP_POT_PROVIDER_URL in .env
+  pot-provider:
+    image: brainicism/bgutil-ytdlp-pot-provider
+    restart: unless-stopped
+    profiles: ["pot"]
+    expose:
+      - "4416"
+
+volumes:
+  caddy_data:
+  caddy_config:
