@@ -20,7 +20,7 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src
 # yt-dlp[default,deno] also installs Deno, the JS runtime yt-dlp needs for YouTube.
-RUN pip install --no-cache-dir . bgutil-ytdlp-pot-provider \
+RUN pip install --no-cache-dir . \
  && if [ "$WITH_WHISPER" = "1" ]; then pip install --no-cache-dir ".[whisper]"; fi \
  && chown -R app:app /opt/venv
 
