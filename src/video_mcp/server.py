@@ -511,6 +511,25 @@ def create_app():
     return TokenAuth(mcp.streamable_http_app(), settings.token)
 
 
+class AccessLogFilter(logging.Filter):
+    """Keep the secret token out of uvicorn's access log and drop health-check noise."""
+
+    def __init__(self, token: str):
+        super().__init__()
+        self.token = token
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        # uvicorn.access args: (client_addr, method, path, http_version, status_code)
+        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str):
+            path = args[2]
+            if path.split("?")[0] in ("/health", "/healthz"):
+                return False
+            if self.token and self.token in path:
+                record.args = (*args[:2], path.replace(self.token, "***"), *args[3:])
+        return True
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Video MCP server")
     parser.add_argument("--transport", choices=["http", "stdio"], default="http")
@@ -525,8 +544,11 @@ def main() -> None:
     import uvicorn
 
     log.info("Serving MCP on http://%s:%s/mcp", settings.host, settings.port)
-    uvicorn.run(create_app(), host=settings.host, port=settings.port, proxy_headers=True,
-                forwarded_allow_ips="*", timeout_keep_alive=120)
+    config = uvicorn.Config(create_app(), host=settings.host, port=settings.port, proxy_headers=True,
+                            forwarded_allow_ips="*", timeout_keep_alive=120)
+    # uvicorn sets up its loggers in Config(), so the filter goes on afterwards
+    logging.getLogger("uvicorn.access").addFilter(AccessLogFilter(settings.token))
+    uvicorn.Server(config).run()
 
 
 if __name__ == "__main__":

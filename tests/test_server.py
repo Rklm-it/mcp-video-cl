@@ -172,3 +172,19 @@ async def test_whisper_fallback_when_no_subtitles(http_video, monkeypatch):
     # cached: Whisper is not run again
     await call("analyze_video", source=http_video, detail="brief")
     assert len(calls) == 1
+
+
+def test_access_log_hides_token_and_health():
+    import logging
+
+    flt = server.AccessLogFilter("s3cret")
+
+    def record(path):
+        return logging.LogRecord("uvicorn.access", logging.INFO, "", 0, '%s - "%s %s HTTP/%s" %d',
+                                 ("1.2.3.4:0", "POST", path, "1.1", 200), None)
+
+    rec = record("/s3cret/mcp")
+    assert flt.filter(rec) and "s3cret" not in rec.getMessage() and "/***/mcp" in rec.getMessage()
+    assert not flt.filter(record("/health"))
+    rec = record("/.env")
+    assert flt.filter(rec) and rec.getMessage().endswith('"POST /.env HTTP/1.1" 200')
