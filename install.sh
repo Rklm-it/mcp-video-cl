@@ -33,9 +33,9 @@ set_env() {  # set_env KEY VALUE: add or replace a line in .env
 [ "$(id -u)" -eq 0 ] || die "запустите от root: curl ... | sudo bash"
 
 # ---------------------------------------------------------------- packages
-if ! command -v git >/dev/null || ! command -v curl >/dev/null; then
-  say "Ставлю git и curl"
-  apt-get update -qq && apt-get install -y -qq git curl ca-certificates >/dev/null
+if ! command -v git >/dev/null || ! command -v curl >/dev/null || ! command -v ss >/dev/null; then
+  say "Ставлю git, curl, iproute2"
+  apt-get update -qq && apt-get install -y -qq git curl ca-certificates iproute2 >/dev/null
 fi
 if ! command -v docker >/dev/null; then
   say "Ставлю Docker"
@@ -86,8 +86,18 @@ if [ -z "$TOKEN" ] || [ "$TOKEN" = "change-me" ]; then
   TOKEN="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 fi
 
+RAM_MB="$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)"
+if [ "$RAM_MB" -lt 2000 ] && [ "$(awk '/SwapTotal/ {print $2}' /proc/meminfo)" -eq 0 ] && [ ! -e /swapfile ]; then
+  say "Мало памяти (${RAM_MB} МБ): добавляю файл подкачки 2 ГБ (/swapfile)"
+  if { fallocate -l 2G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none; } \
+    && chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile; then
+    echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  else
+    rm -f /swapfile
+    warn "не удалось включить подкачку, продолжаю без неё"
+  fi
+fi
 if [ "$FIRST_RUN" = 1 ]; then
-  RAM_MB="$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)"
   if [ "$RAM_MB" -lt 1500 ]; then
     warn "Всего ${RAM_MB} МБ RAM: Whisper (распознавание речи без субтитров) выключен"
     set_env WITH_WHISPER 0
@@ -110,11 +120,29 @@ if [ -n "$IP" ] && command -v getent >/dev/null; then
     warn "Создайте A-запись $DOMAIN -> $IP, иначе HTTPS-сертификат не выдадут."
   fi
 fi
-for port in 80 443; do
-  if ss -ltnH "sport = :$port" 2>/dev/null | grep -q . && ! docker compose ps -q caddy 2>/dev/null | grep -q .; then
-    die "порт $port уже занят другой программой (nginx/apache?). Остановите её или смотрите README, раздел про nginx."
-  fi
-done
+BUSY=""
+if ! docker compose ps -q caddy 2>/dev/null | grep -q .; then
+  for port in 80 443; do
+    if ss -ltnH "sport = :$port" 2>/dev/null | grep -q .; then
+      WHO="$(ss -ltnpH "sport = :$port" 2>/dev/null | grep -o 'users:(("[^"]*"' | head -1 | cut -d'"' -f2)"
+      if [ -z "$WHO" ] || [ "$WHO" = "docker-proxy" ]; then
+        WHO="$(docker ps --format '{{.Names}} ({{.Image}})  {{.Ports}}' 2>/dev/null | grep -E ":$port->" | cut -d' ' -f1-2 | head -1)"
+      fi
+      BUSY="$BUSY
+  порт $port занят: ${WHO:-неизвестная программа}"
+    fi
+  done
+fi
+if [ -n "$BUSY" ]; then
+  echo
+  warn "Порты 80/443 нужны для HTTPS, но уже заняты:$BUSY"
+  echo
+  echo "Скопируйте вывод этих команд и пришлите его Claude, он подскажет, как встроиться рядом:"
+  echo "  ss -ltnp | grep -E ':(80|443) '"
+  echo "  docker ps --format '{{.Names}}  {{.Image}}  {{.Ports}}'"
+  echo "  ls /etc/nginx/sites-enabled /etc/caddy 2>/dev/null"
+  die "установка остановлена, чтобы не сломать то, что уже работает на сервере"
+fi
 if command -v ufw >/dev/null && ufw status | grep -q "Status: active"; then
   ufw allow 80/tcp >/dev/null && ufw allow 443/tcp >/dev/null
 fi
