@@ -9,15 +9,17 @@ services:
     volumes:
       - ./data:/data
       - ./secrets:/secrets:ro
-    expose:
-      - "8000"
-    # Uncomment to reach the server directly without Caddy (e.g. behind your own nginx):
-    # ports:
-    #   - "127.0.0.1:8000:8000"
+    # Reachable only from this machine: for a reverse proxy already installed on the host
+    # (install.sh wires system Caddy to it automatically).
+    ports:
+      - "127.0.0.1:${VIDEO_MCP_HOST_PORT:-8765}:8000"
 
+  # Bundled HTTPS proxy, used when ports 80/443 are free:
+  #   docker compose --profile builtin-proxy up -d
   caddy:
     image: caddy:2
     restart: unless-stopped
+    profiles: ["builtin-proxy"]
     depends_on:
       - video-mcp
     ports:

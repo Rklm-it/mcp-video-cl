@@ -114,48 +114,119 @@ fi
 
 # ---------------------------------------------------------------- checks
 if [ -n "$IP" ] && command -v getent >/dev/null; then
-  RESOLVED="$(getent ahostsv4 "$DOMAIN" | awk 'NR==1 {print $1}')"
+  RESOLVED="$(getent ahostsv4 "$DOMAIN" | awk 'NR==1 {print $1}' || true)"
   if [ "$RESOLVED" != "$IP" ]; then
     warn "$DOMAIN указывает на '${RESOLVED:-никуда}', а IP этого сервера $IP."
     warn "Создайте A-запись $DOMAIN -> $IP, иначе HTTPS-сертификат не выдадут."
   fi
 fi
-BUSY=""
-if ! docker compose ps -q caddy 2>/dev/null | grep -q .; then
-  for port in 80 443; do
-    if ss -ltnH "sport = :$port" 2>/dev/null | grep -q .; then
-      WHO="$(ss -ltnpH "sport = :$port" 2>/dev/null | grep -o 'users:(("[^"]*"' | head -1 | cut -d'"' -f2)"
-      if [ -z "$WHO" ] || [ "$WHO" = "docker-proxy" ]; then
-        WHO="$(docker ps --format '{{.Names}} ({{.Image}})  {{.Ports}}' 2>/dev/null | grep -E ":$port->" | cut -d' ' -f1-2 | head -1)"
-      fi
-      BUSY="$BUSY
-  порт $port занят: ${WHO:-неизвестная программа}"
-    fi
-  done
+port_owner() {  # port_owner PORT -> program name listening on it (empty if free)
+  local who
+  # (no "| grep -q" here: with pipefail an early grep exit makes the pipeline fail at random)
+  [ -n "$(ss -ltnH "sport = :$1" 2>/dev/null)" ] || return 0
+  who="$(ss -ltnpH "sport = :$1" 2>/dev/null | grep -o 'users:(("[^"]*"' | head -1 | cut -d'"' -f2 || true)"
+  if [ -z "$who" ] || [ "$who" = "docker-proxy" ]; then
+    who="docker: $(docker ps --format '{{.Names}} ({{.Image}}) {{.Ports}}' 2>/dev/null | grep -E ":$1->" | cut -d' ' -f1-2 | head -1 || true)"
+  fi
+  echo "${who:-неизвестная программа}"
+}
+
+# builtin = our Caddy container on 80/443; system-caddy = add a site to Caddy already on the host
+CADDY_DIR="${CADDY_DIR:-/etc/caddy}"
+PROXY_MODE="$(grep -E '^PROXY_MODE=' .env | cut -d= -f2- || true)"
+if [ -z "$PROXY_MODE" ]; then
+  OWNER80="$(port_owner 80)"
+  OWNER443="$(port_owner 443)"
+  if [ -z "$OWNER80$OWNER443" ]; then
+    PROXY_MODE=builtin
+  elif { [ "$OWNER80" = caddy ] || [ "$OWNER443" = caddy ]; } && [ -f "$CADDY_DIR/Caddyfile" ]; then
+    PROXY_MODE=system-caddy
+    say "На сервере уже работает Caddy: добавлю в него сайт $DOMAIN, остальные сайты не трогаю"
+  else
+    echo
+    warn "Порты 80/443 нужны для HTTPS, но уже заняты:"
+    [ -n "$OWNER80" ] && echo "  порт 80: $OWNER80"
+    [ -n "$OWNER443" ] && echo "  порт 443: $OWNER443"
+    echo
+    echo "Скопируйте вывод этих команд и пришлите его Claude, он подскажет, как встроиться рядом:"
+    echo "  ss -ltnp | grep -E ':(80|443) '"
+    echo "  docker ps --format '{{.Names}}  {{.Image}}  {{.Ports}}'"
+    echo "  ls /etc/nginx/sites-enabled /etc/caddy 2>/dev/null"
+    die "установка остановлена, чтобы не сломать то, что уже работает на сервере"
+  fi
+  set_env PROXY_MODE "$PROXY_MODE"
 fi
-if [ -n "$BUSY" ]; then
-  echo
-  warn "Порты 80/443 нужны для HTTPS, но уже заняты:$BUSY"
-  echo
-  echo "Скопируйте вывод этих команд и пришлите его Claude, он подскажет, как встроиться рядом:"
-  echo "  ss -ltnp | grep -E ':(80|443) '"
-  echo "  docker ps --format '{{.Names}}  {{.Image}}  {{.Ports}}'"
-  echo "  ls /etc/nginx/sites-enabled /etc/caddy 2>/dev/null"
-  die "установка остановлена, чтобы не сломать то, что уже работает на сервере"
+
+HOST_PORT="$(grep -E '^VIDEO_MCP_HOST_PORT=' .env | cut -d= -f2- || true)"
+if [ -z "$HOST_PORT" ]; then
+  HOST_PORT=8765
+  while [ -n "$(port_owner "$HOST_PORT")" ]; do HOST_PORT=$((HOST_PORT + 1)); done
+  set_env VIDEO_MCP_HOST_PORT "$HOST_PORT"
 fi
-if command -v ufw >/dev/null && ufw status | grep -q "Status: active"; then
+
+if command -v ufw >/dev/null && [[ "$(ufw status 2>/dev/null)" == *"Status: active"* ]]; then
   ufw allow 80/tcp >/dev/null && ufw allow 443/tcp >/dev/null
 fi
+
+configure_system_caddy() {
+  local main="$CADDY_DIR/Caddyfile" pattern dir glob target stamp
+  stamp="$(date +%s)"
+  # Prefer a directory the Caddyfile already imports, e.g. "import sites/*" or "import /etc/caddy/sites/*.caddy"
+  pattern="$(grep -E '^[[:space:]]*import[[:space:]]+[^[:space:]]*\*' "$main" | head -1 | awk '{print $2}' || true)"
+  if [ -n "$pattern" ]; then
+    dir="$(dirname "$pattern")"
+    glob="$(basename "$pattern")"
+    case "$dir" in /*) ;; *) dir="$CADDY_DIR/$dir" ;; esac
+    target="$dir/video-mcp${glob##*\*}"
+  else
+    target="$CADDY_DIR/video-mcp.caddy"
+  fi
+  cp "$main" "$main.bak.video-mcp.$stamp"
+  mkdir -p "$(dirname "$target")"
+  cat > "$target" <<CADDY
+# video-mcp (added by install.sh; delete this file and reload Caddy to remove)
+$DOMAIN {
+	reverse_proxy 127.0.0.1:$HOST_PORT {
+		flush_interval -1
+		transport http {
+			read_timeout 30m
+			write_timeout 30m
+		}
+	}
+}
+CADDY
+  if [[ "$(caddy adapt --config "$main" --adapter caddyfile 2>/dev/null)" != *"\"$DOMAIN\""* ]]; then
+    # the file is not picked up by an import: import it explicitly
+    grep -qF "import $target" "$main" || printf '\nimport %s\n' "$target" >> "$main"
+  fi
+  if ! caddy validate --config "$main" --adapter caddyfile >/tmp/video-mcp-caddy.log 2>&1; then
+    cp "$main.bak.video-mcp.$stamp" "$main"
+    rm -f "$target"
+    cat /tmp/video-mcp-caddy.log >&2
+    die "конфиг Caddy не прошёл проверку, изменения откатил; ваш Caddy работает как раньше"
+  fi
+  if ! systemctl reload caddy 2>/dev/null && ! caddy reload --config "$main" --adapter caddyfile 2>/dev/null; then
+    cp "$main.bak.video-mcp.$stamp" "$main"
+    rm -f "$target"
+    die "не удалось перезагрузить Caddy, изменения откатил"
+  fi
+  say "Сайт $DOMAIN добавлен в Caddy ($target), копия старого конфига: $main.bak.video-mcp.$stamp"
+}
 
 [ -n "${NO_START:-}" ] && { say "NO_START: настройки записаны в $DIR/.env, запуск пропущен"; exit 0; }
 
 # ---------------------------------------------------------------- start
 say "Собираю и запускаю (первый раз 3-10 минут)"
-docker compose up -d --build --remove-orphans
+if [ "$PROXY_MODE" = builtin ]; then
+  docker compose --profile builtin-proxy up -d --build --remove-orphans
+else
+  docker compose up -d --build --remove-orphans
+  grep -rqsF "reverse_proxy 127.0.0.1:$HOST_PORT" "$CADDY_DIR" || configure_system_caddy
+fi
 
 say "Жду, пока заработает https://$DOMAIN"
 OK=0
-for _ in $(seq 1 60); do
+for _ in $(seq 1 "${HEALTH_TRIES:-60}"); do
   if curl -fsS --max-time 5 "https://$DOMAIN/health" >/dev/null 2>&1; then OK=1; break; fi
   sleep 5
 done
