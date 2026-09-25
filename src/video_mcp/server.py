@@ -482,6 +482,9 @@ class TokenAuth:
         path: str = scope.get("path", "")
         if path in ("/health", "/healthz"):
             return await _plain(send, 200, b"ok")
+        if path.startswith("/.well-known/"):
+            # No OAuth here: a 404 tells MCP clients (claude.ai) to connect without an auth flow.
+            return await _plain(send, 404, b"not found")
         if self.token:
             prefix = f"/{self.token}"
             headers = dict(scope.get("headers") or [])

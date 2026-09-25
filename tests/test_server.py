@@ -133,7 +133,10 @@ async def test_health_is_public(http_app):
     transport = httpx.ASGITransport(app=http_app)
     async with httpx.AsyncClient(transport=transport, base_url="http://x") as client:
         resp = await client.get("/health")
-    assert resp.status_code == 200
+        assert resp.status_code == 200
+        # OAuth discovery must say "no OAuth" (404), not "unauthorized"
+        for path in ("/.well-known/oauth-protected-resource", "/.well-known/oauth-authorization-server"):
+            assert (await client.get(path)).status_code == 404
 
 
 async def test_url_section_download_keeps_timeline(http_video, monkeypatch):
