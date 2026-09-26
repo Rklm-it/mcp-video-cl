@@ -327,3 +327,23 @@ async def test_reel_with_banned_words_is_refused():
     res = await call("create_reel", title="Доход на доставке", offer_id="eda", background=False,
                      scenes=[{"text": "Как заработать на доставке.", "image_prompt": "p", "offer": True}])
     assert not res.isError, res.content[0].text
+
+
+def test_cleanup_old_drops_media_of_old_published_reels(tmp_path):
+    import os
+    import time as _time
+
+    old = {"id": "0901-1000-aaaa", "created": "2026-09-01 10:00:00", "status": "published", "title": "t",
+           "scenes": []}
+    fresh = dict(old, id="0926-1000-bbbb", created="2026-09-26 10:00:00")
+    failed = dict(old, id="0901-1000-cccc", status="failed")
+    for j in (old, fresh, failed):
+        jobs.save(j)
+        (jobs.job_dir(j["id"]) / "reel.mp4").write_bytes(b"x")
+    past = _time.time() - 10 * 86400
+    for j in (old, failed):
+        os.utime(jobs.job_dir(j["id"]) / "job.json", (past, past))
+    reels_tools.cleanup_old()
+    assert not (jobs.job_dir(old["id"]) / "reel.mp4").exists() and (jobs.job_dir(old["id"]) / "job.json").exists()
+    assert (jobs.job_dir(fresh["id"]) / "reel.mp4").exists()
+    assert not jobs.job_dir(failed["id"]).exists()

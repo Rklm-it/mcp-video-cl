@@ -63,6 +63,8 @@ class ReelsSettings:
     music_volume: float = field(default_factory=lambda: _env_float("REELS_MUSIC_VOLUME", 0.12))
 
     font: str = field(default_factory=lambda: _env("REELS_FONT", DEFAULT_FONT))
+    # Days to keep the video files of published reels (the record in job.json stays)
+    keep_days: float = field(default_factory=lambda: _env_float("REELS_KEEP_DAYS", 3))
 
     # Telegram: bot that posts to the channel and sends drafts to the review chat
     tg_token: str = field(default_factory=lambda: _env("REELS_TG_BOT_TOKEN"))

@@ -342,6 +342,7 @@ def process(job: dict, after: str, progress=lambda _f, _m: None) -> str:
             job["render_seconds"] = round(time.monotonic() - started, 1)
             job["status"] = "ready"
             jobs.save(job)
+        cleanup_old()
     except Exception as exc:
         job["status"] = "failed"
         job["error"] = str(exc)[:500]
@@ -398,10 +399,18 @@ def _scout(url: str, limit: int, top: int) -> str:
     return "\n".join(lines)
 
 
-def cleanup_failed(max_age_days: float = 7) -> None:
-    """Remove media of failed/rejected reels older than `max_age_days` (called on start)."""
-    cutoff = time.time() - max_age_days * 86400
+def cleanup_old(max_age_days: float = 7) -> None:
+    """Keep the small VPS disk free: delete failed/rejected reels after `max_age_days`, and the
+    media of published reels after REELS_KEEP_DAYS (job.json stays for the history)."""
+    now = time.time()
     for j in jobs.all_jobs():
         d = jobs.job_dir(j["id"])
-        if j["status"] in ("failed", "rejected") and (d / "job.json").stat().st_mtime < cutoff:
+        try:
+            age_days = (now - (d / "job.json").stat().st_mtime) / 86400
+        except OSError:
+            continue
+        if j["status"] in ("failed", "rejected") and age_days > max_age_days:
             shutil.rmtree(d, ignore_errors=True)
+        elif j["status"] == "published" and age_days > reels_settings.keep_days:
+            with jobs.lock(j["id"]):
+                jobs.drop_media(j["id"])

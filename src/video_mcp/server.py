@@ -555,7 +555,7 @@ def main() -> None:
         from .reels import publish as reels_publish
 
         reels_settings.jobs_dir.mkdir(parents=True, exist_ok=True)
-        reels_tools.cleanup_failed()
+        reels_tools.cleanup_old()
         reels_publish.start_review_bot()
     if args.transport == "stdio":
         mcp.run("stdio")
