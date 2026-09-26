@@ -115,10 +115,11 @@ Veo 3.1 Fast стоит 11,58 ₽/сек, обычный Veo 3.1 — 27,37 ₽/�
       (`openai/gpt-4o-mini-tts`), картинки Gemini через ProxyAPI (~10 ₽ за кадр), первая сцена —
       Veo 3.1 Lite через `REELS_VIDEO=openai` (`/v1/videos`, 4,11 ₽/сек без звука). Пока
       `REELS_MAX_ANIMATED=1`. Себестоимость ролика со всеми оживлёнными сценами — **~130 ₽**
-- [ ] Голос звучит медленно и «нейронно»: подобрать голос или инструкции (образцы — `data/voice-test`),
-      проверить `gemini/gemini-2.5-flash-preview-tts` в Timeweb
+- [x] Голос: `gemini/gemini-2.5-flash-preview-tts`, голос `Charon` (через Timeweb; выбран на слух из 8 образцов,
+      OpenAI-голоса звучали медленно и «нейронно»). Timeweb отдаёт его только в WAV и падает с 500 на любой
+      `response_format`, фабрика сама перегоняет в mp3. Инструкции про манеру речи Gemini через Timeweb игнорирует
 - [ ] Подешевле картинки: попробовать `gemini-3.1-flash-lite-image` в ProxyAPI
-- [ ] Когда голос устроит: убрать `REELS_MAX_ANIMATED=1`, оживлять все сцены
+- [ ] Убрать `REELS_MAX_ANIMATED=1`, оживлять все сцены (чистовой ролик по сценарию 3)
 - [ ] Юрлицо рекламодателя (ждём поддержку Pampadu) → `save_offer` (параметры выше) → ролики с оффером
 - [ ] Музыка в `/opt/video-mcp/data/music` (пока 0 треков, ролики собираются без музыки)
 - [ ] VK-сообщество и YouTube-канал; позже YouTube (`video-mcp-youtube-auth`)

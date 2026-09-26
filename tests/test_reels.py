@@ -473,3 +473,29 @@ def test_openai_style_videos_api(tmp_path, monkeypatch):
     polls = iter([{"id": "video_1", "status": "failed", "error": {"message": "blocked"}}])
     with pytest.raises(RuntimeError, match="blocked"):
         video_gen.animate(img, "wallet", 3, tmp_path / "out2.mp4")
+
+
+def test_openai_tts_gemini_voice_comes_as_wav(tmp_path, monkeypatch):
+    import httpx
+
+    from video_mcp.frames import probe_duration
+    from video_mcp.reels import net
+
+    wav = tmp_path / "src.wav"
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi",
+                    "-i", "sine=frequency=300:duration=1.5", "-ar", "24000", "-ac", "1", str(wav)], check=True)
+    bodies = []
+
+    def fake_post(url, headers, json, timeout):
+        bodies.append(dict(json))
+        return httpx.Response(200, content=wav.read_bytes(), headers={"content-type": "audio/wav"})
+
+    monkeypatch.setattr(reels_settings, "openai_key", "k")
+    monkeypatch.setattr(reels_settings, "openai_tts_model", "gemini/gemini-2.5-flash-preview-tts")
+    monkeypatch.setattr(net, "post", fake_post)
+    out = tmp_path / "v.mp3"
+    words = tts._openai("раз два три", out)
+    assert "response_format" not in bodies[0]
+    assert out.read_bytes()[:3] == b"ID3" or out.read_bytes()[:2] in (b"\xff\xfb", b"\xff\xf3")
+    assert probe_duration(out) == pytest.approx(1.5, abs=0.1) and len(words) == 3
+    assert not out.with_suffix(".wav").exists()
