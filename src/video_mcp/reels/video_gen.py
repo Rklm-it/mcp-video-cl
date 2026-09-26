@@ -31,7 +31,9 @@ def animate(image: Path, prompt: str, seconds: float, out: Path) -> Path:
     provider = reels_settings.video
     if provider == "veo":
         return _veo(image, prompt, clip_seconds(seconds), out)
-    raise ValueError(f"Video generation is off (REELS_VIDEO={provider!r}); set REELS_VIDEO=veo")
+    if provider == "openai":
+        return _openai_videos(image, prompt, clip_seconds(seconds), out)
+    raise ValueError(f"Video generation is off (REELS_VIDEO={provider!r}); set REELS_VIDEO=veo or openai")
 
 
 def _veo(image: Path, prompt: str, seconds: int, out: Path) -> Path:
@@ -72,3 +74,43 @@ def _veo(image: Path, prompt: str, seconds: int, out: Path) -> Path:
         reasons = result.get("raiMediaFilteredReasons") or ["no video returned"]
         raise RuntimeError(f"Veo returned no video: {'; '.join(map(str, reasons))}")
     return gemini.download(samples[0]["video"]["uri"], out)
+
+
+def _openai_videos(image: Path, prompt: str, seconds: int, out: Path) -> Path:
+    """OpenAI-style /videos API: create a job with the first frame, poll it, download the mp4."""
+    s = reels_settings
+    if not s.video_key:
+        raise ValueError("Set REELS_VIDEO_API_KEY (or REELS_GEMINI_API_KEY)")
+    base, auth = s.video_base_url.rstrip("/"), {"Authorization": f"Bearer {s.video_key}"}
+    width, height = (1080, 1920) if s.veo_resolution == "1080p" else (720, 1280)
+    buf = io.BytesIO()
+    # The first frame must match the requested size exactly
+    Image.open(image).convert("RGB").resize((width, height), Image.Resampling.LANCZOS).save(buf, format="PNG")
+    resp = httpx.post(f"{base}/videos", headers=auth, timeout=120, data={
+        "model": s.veo_model,
+        "prompt": f"{prompt}. Smooth cinematic camera motion, natural movement, vertical 9:16. Avoid: {NEGATIVE}.",
+        "seconds": str(seconds),
+        "size": f"{width}x{height}",
+    }, files={"input_reference": ("frame.png", buf.getvalue(), "image/png")})
+    if resp.status_code >= 400:
+        raise RuntimeError(f"Video API error {resp.status_code}: {resp.text[:300]}")
+    video_id = resp.json()["id"]
+    deadline = time.monotonic() + TIMEOUT_SECONDS
+    while True:
+        time.sleep(POLL_SECONDS)
+        poll = net.get(f"{base}/videos/{video_id}", headers=auth, timeout=60)
+        if poll.status_code >= 400:
+            raise RuntimeError(f"Video status error {poll.status_code}: {poll.text[:300]}")
+        job = poll.json()
+        if job.get("status") == "completed":
+            break
+        if job.get("status") in ("failed", "cancelled", "expired") or job.get("error"):
+            error = job.get("error") or {}
+            raise RuntimeError(f"Video failed: {error.get('message', error) if isinstance(error, dict) else error}")
+        if time.monotonic() > deadline:
+            raise RuntimeError(f"Video did not finish in {TIMEOUT_SECONDS // 60} minutes")
+    video = net.get(f"{base}/videos/{video_id}/content", headers=auth, timeout=300, follow_redirects=True)
+    if video.status_code >= 400:
+        raise RuntimeError(f"Video download failed {video.status_code}: {video.text[:300]}")
+    out.write_bytes(video.content)
+    return out

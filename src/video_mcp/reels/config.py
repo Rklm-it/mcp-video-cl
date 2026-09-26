@@ -46,8 +46,12 @@ class ReelsSettings:
     image_style: str = field(default_factory=lambda: _env(
         "REELS_IMAGE_STYLE", "vertical 9:16, cinematic, high detail, no text, no letters, no watermark"))
 
-    # Animated scenes: none | veo (Veo 3.1 image-to-video through the Gemini API, paid per second)
+    # Animated scenes, paid per second: none | veo (Veo 3.1 image-to-video through the Gemini API) |
+    # openai (OpenAI-style /videos API, e.g. ProxyAPI's unified API, the only way to Veo 3.1 Lite there)
     video: str = field(default_factory=lambda: _env("REELS_VIDEO", "none"))
+    video_base_url: str = field(default_factory=lambda: _env("REELS_VIDEO_BASE_URL", "https://api.proxyapi.ru/v1"))
+    # Defaults to the Gemini key: with ProxyAPI one key serves both APIs
+    video_key: str = field(default_factory=lambda: _env("REELS_VIDEO_API_KEY") or _env("REELS_GEMINI_API_KEY"))
     veo_model: str = field(default_factory=lambda: _env("REELS_VEO_MODEL", "veo-3.1-lite-generate-preview"))
     veo_resolution: str = field(default_factory=lambda: _env("REELS_VEO_RESOLUTION", "720p"))
     # Every generated scene becomes video unless the script says animate=false

@@ -71,9 +71,10 @@ forbidden_words: работ, подработ, трудоустр, зарпла�
 | Музыка | фонотека YouTube (Audio Library), папка `data/music` | 0 ₽ |
 | Сборка, публикация | ffmpeg на VPS, Telegram Bot API, YouTube Data API | 0 ₽ |
 
-Veo 3.1 Fast стоит 11,58 ₽/сек, обычный Veo 3.1 — 27,37 ₽/сек. Имя модели в ProxyAPI —
-`google/veo-3.1-lite`; в коде по умолчанию `veo-3.1-lite-generate-preview` (имя из Gemini API).
-Если ProxyAPI ответит ошибкой модели, поставить `REELS_VEO_MODEL=google/veo-3.1-lite`.
+Veo 3.1 Fast стоит 11,58 ₽/сек, обычный Veo 3.1 — 27,37 ₽/сек. **Lite есть только в едином API ProxyAPI**
+(`https://api.proxyapi.ru/v1/videos`, формат OpenAI, модель `google/veo-3.1-lite`). В Gemini-формате
+(`/google/v1beta`) его нет: там только `veo-3.1-generate-preview` и `veo-3.1-fast-generate-preview`,
+а на Lite он отвечает 404. Поэтому `REELS_VIDEO=openai`, `REELS_VEO_MODEL=google/veo-3.1-lite`.
 
 **Себестоимость ролика:** 24 сек = 3 сцены по 8 сек (клип Veo бывает 4/6/8 сек, 8 — без потерь).
 24 × 4,11 = ~99 ₽, плюс голос ~1 ₽ и запас 10% — **~110 ₽**. В месяц: 1 ролик в день — ~3 300 ₽,

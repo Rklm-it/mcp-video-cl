@@ -1,3 +1,4 @@
+import io
 import json
 import subprocess
 
@@ -418,3 +419,48 @@ def test_pollinations_watermark_strip_is_cut(monkeypatch, tmp_path):
     out = Image.open(images.generate("cat", tmp_path / "p.png", 1))
     assert out.size == (1080, 1920)
     assert max(out.convert("L").getdata()) < 100  # no white logo left
+
+
+def test_openai_style_videos_api(tmp_path, monkeypatch):
+    import httpx
+    from PIL import Image
+
+    from video_mcp.reels import video_gen
+
+    monkeypatch.setattr(reels_settings, "video", "openai")
+    monkeypatch.setattr(reels_settings, "video_base_url", "https://api.example.ru/v1/")
+    monkeypatch.setattr(reels_settings, "video_key", "k1")
+    monkeypatch.setattr(reels_settings, "veo_model", "google/veo-3.1-lite")
+    monkeypatch.setattr(reels_settings, "veo_resolution", "720p")
+    monkeypatch.setattr(video_gen, "POLL_SECONDS", 0)
+    seen = {}
+
+    def fake_post(url, headers, timeout, data, files):
+        seen.update(url=url, headers=headers, data=data)
+        seen["frame"] = Image.open(io.BytesIO(files["input_reference"][1])).size
+        return httpx.Response(200, json={"id": "video_1", "status": "queued"})
+
+    polls = iter([{"id": "video_1", "status": "in_progress"}, {"id": "video_1", "status": "completed"}])
+
+    def fake_get(url, headers, timeout, **kwargs):
+        seen.setdefault("gets", []).append(url)
+        if url.endswith("/content"):
+            return httpx.Response(200, content=b"mp4")
+        return httpx.Response(200, json=next(polls))
+
+    monkeypatch.setattr(video_gen.httpx, "post", fake_post)
+    monkeypatch.setattr(video_gen.net, "get", fake_get)
+    img = tmp_path / "f.png"
+    Image.new("RGB", (1080, 1920), "blue").save(img)
+    out = video_gen.animate(img, "wallet", 7.2, tmp_path / "out.mp4")
+
+    assert out.read_bytes() == b"mp4"
+    assert seen["url"] == "https://api.example.ru/v1/videos"
+    assert seen["headers"] == {"Authorization": "Bearer k1"}
+    assert seen["data"]["model"] == "google/veo-3.1-lite" and seen["data"]["seconds"] == "8"
+    assert seen["data"]["size"] == "720x1280" and seen["frame"] == (720, 1280)
+    assert seen["gets"][-1] == "https://api.example.ru/v1/videos/video_1/content"
+
+    polls = iter([{"id": "video_1", "status": "failed", "error": {"message": "blocked"}}])
+    with pytest.raises(RuntimeError, match="blocked"):
+        video_gen.animate(img, "wallet", 3, tmp_path / "out2.mp4")

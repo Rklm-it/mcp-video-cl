@@ -74,10 +74,12 @@ setv REELS_OPENAI_BASE_URL https://api.timeweb.ai/v1
 # Timeweb names models with the provider prefix; without it the speech API answers 500
 [ -n "$(current REELS_OPENAI_TTS_MODEL)" ] || setv REELS_OPENAI_TTS_MODEL openai/gpt-4o-mini-tts
 [ -n "$(current REELS_IMAGES)" ] || setv REELS_IMAGES pollinations
-setv REELS_VIDEO veo
+# Veo 3.1 Lite is only in ProxyAPI's unified OpenAI-style API (/v1/videos), not in its Gemini API
+setv REELS_VIDEO openai
+setv REELS_VIDEO_BASE_URL https://api.proxyapi.ru/v1
 setv REELS_ANIMATE_ALL 1
 setv REELS_VEO_RESOLUTION 720p
-[ -n "$(current REELS_VEO_MODEL)" ] || setv REELS_VEO_MODEL veo-3.1-lite-generate-preview
+case "$(current REELS_VEO_MODEL)" in ""|veo-3.1-lite-generate-preview) setv REELS_VEO_MODEL google/veo-3.1-lite ;; esac
 setv REELS_GEMINI_BASE_URL https://api.proxyapi.ru/google/v1beta
 setv REELS_GEMINI_AUTH bearer
 setv REELS_MUSIC_DIR /data/music

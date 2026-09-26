@@ -148,7 +148,7 @@ def register(mcp: FastMCP, run) -> None:
             f"Voice: {s.tts}" + (f" ({s.edge_voice}, rate {s.edge_rate})" if s.tts == "edge" else ""),
             f"Pictures: {s.images}",
             f"Video scenes: {s.video}" + (f" ({s.veo_model}, {s.veo_resolution}, max {s.max_animated} per reel)"
-                                          if s.video == "veo" else ""),
+                                          if s.video in ("veo", "openai") else ""),
             f"Music tracks: {len(s.music_tracks())}" + (f" in {s.music_dir}" if s.music_dir else " (REELS_MUSIC_DIR not set)"),
             f"Publish targets: {', '.join(s.publish_targets()) or 'none configured'}",
             f"Telegram review: {'on' if s.review_enabled else 'off'}",
