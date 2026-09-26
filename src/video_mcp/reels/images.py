@@ -27,7 +27,7 @@ def generate(prompt: str, out: Path, seed: int) -> Path:
     provider = reels_settings.images
     full = f"{prompt}. {reels_settings.image_style}" if reels_settings.image_style else prompt
     if provider == "pollinations":
-        raw = _pollinations(full, seed)
+        return fit(_cut_watermark(Image.open(io.BytesIO(_pollinations(full, seed)))), out)
     elif provider == "gemini":
         raw = _gemini(full)
     elif provider == "openai":
@@ -47,6 +47,15 @@ def fit(image: Image.Image, out: Path) -> Path:
     left, top = (image.width - W) // 2, (image.height - H) // 2
     image.crop((left, top, left + W, top + H)).save(out, format="PNG")
     return out
+
+
+# Anonymous Pollinations ignores nologo and stamps its logo in the bottom-right corner
+POLLINATIONS_WATERMARK = 0.07
+
+
+def _cut_watermark(image: Image.Image) -> Image.Image:
+    """Drop the bottom strip with the logo; fit() then scales the rest back to 1080x1920."""
+    return image.crop((0, 0, image.width, round(image.height * (1 - POLLINATIONS_WATERMARK))))
 
 
 # The free Pollinations API often answers 5xx/429 for a while: wait and ask again

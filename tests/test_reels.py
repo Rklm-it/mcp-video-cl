@@ -378,3 +378,21 @@ def test_pollinations_retries_server_errors(monkeypatch):
     with pytest.raises(httpx.HTTPStatusError):
         images._pollinations("cat", 1)
     assert answers == []
+
+
+def test_pollinations_watermark_strip_is_cut(monkeypatch, tmp_path):
+    import io
+
+    from PIL import Image
+
+    from video_mcp.reels import images
+
+    picture = Image.new("RGB", (1080, 1920), "blue")
+    picture.paste(Image.new("RGB", (300, 60), "white"), (760, 1840))  # the logo
+    buf = io.BytesIO()
+    picture.save(buf, format="PNG")
+    monkeypatch.setattr(reels_settings, "images", "pollinations")
+    monkeypatch.setattr(images, "_pollinations", lambda prompt, seed: buf.getvalue())
+    out = Image.open(images.generate("cat", tmp_path / "p.png", 1))
+    assert out.size == (1080, 1920)
+    assert max(out.convert("L").getdata()) < 100  # no white logo left
