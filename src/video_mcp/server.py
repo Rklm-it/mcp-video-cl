@@ -548,6 +548,8 @@ def main() -> None:
     parser.add_argument("--transport", choices=["http", "stdio"], default="http")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    # httpx logs every request URL at INFO, and the Telegram Bot API keeps the bot token in the URL
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     settings.cache_dir.mkdir(parents=True, exist_ok=True)
     settings.local_video_dir.mkdir(parents=True, exist_ok=True)
     src_mod.cleanup_cache()
