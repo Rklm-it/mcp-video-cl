@@ -71,7 +71,7 @@ fi
 setv REELS_ENABLED 1
 setv REELS_TTS openai
 setv REELS_OPENAI_BASE_URL https://api.timeweb.ai/v1
-setv REELS_IMAGES pollinations
+[ -n "$(current REELS_IMAGES)" ] || setv REELS_IMAGES pollinations
 setv REELS_VIDEO veo
 setv REELS_ANIMATE_ALL 1
 setv REELS_VEO_RESOLUTION 720p
