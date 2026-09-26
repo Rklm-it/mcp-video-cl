@@ -25,6 +25,9 @@ pictures, rendering and uploading.
 1. Write the script yourself: 4-7 scenes, 20-40 s in total. Scene 1 is the hook (a concrete number
    or a surprising claim in the first 2 seconds). Each scene = one or two short spoken sentences +
    an English image_prompt (no text in the picture) or `media` (a URL or a file from the video folder).
+   The server adds the scene setting (REELS_SCENE_CONTEXT, Russia by default) to every picture and video
+   prompt, but still name local details yourself (Russian DPS uniform, Russian street, Russian interior)
+   and check the preview frames for foreign police, cars, streets or signs.
    animate turns a scene into a short AI video (paid). With REELS_ANIMATE_ALL=1 every scene is video
    by default; reels with video render in the background and take several minutes.
 2. Before calling create_reel, check facts and numbers, and remove promises of easy money, loans,

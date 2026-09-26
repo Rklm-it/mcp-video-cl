@@ -22,6 +22,10 @@ TIMEOUT_SECONDS = 600
 NEGATIVE = "text, letters, captions, subtitles, watermark, logo, distorted faces, extra fingers"
 
 
+def _with_context(prompt: str) -> str:
+    return f"{prompt}. {reels_settings.scene_context}" if reels_settings.scene_context else prompt
+
+
 def clip_seconds(scene_seconds: float) -> int:
     """Shortest allowed clip that covers the scene (longer scenes hold the last frame)."""
     return next((d for d in VEO_DURATIONS if d >= scene_seconds), VEO_DURATIONS[-1])
@@ -44,7 +48,7 @@ def _veo(image: Path, prompt: str, seconds: int, out: Path) -> Path:
     frame.save(buf, format="PNG")
     body = {
         "instances": [{
-            "prompt": f"{prompt}. Smooth cinematic camera motion, natural movement, vertical 9:16.",
+            "prompt": f"{_with_context(prompt)}. Smooth cinematic camera motion, natural movement, vertical 9:16.",
             "image": {"bytesBase64Encoded": base64.b64encode(buf.getvalue()).decode(), "mimeType": "image/png"},
         }],
         "parameters": {"aspectRatio": "9:16", "durationSeconds": seconds, "resolution": s.veo_resolution,
@@ -90,7 +94,7 @@ def _openai_videos(image: Path, prompt: str, seconds: int, out: Path) -> Path:
     frame = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
     resp = httpx.post(f"{base}/videos", headers=auth, timeout=120, json={
         "model": s.veo_model,
-        "prompt": f"{prompt}. Smooth cinematic camera motion, natural movement, vertical 9:16. Avoid: {NEGATIVE}.",
+        "prompt": f"{_with_context(prompt)}. Smooth cinematic camera motion, natural movement, vertical 9:16. Avoid: {NEGATIVE}.",
         "duration": seconds,
         "resolution": s.veo_resolution,
         "aspect_ratio": "9:16",

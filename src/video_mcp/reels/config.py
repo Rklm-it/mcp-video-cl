@@ -10,6 +10,14 @@ from ..config import _env, _env_bool, _env_float, _env_int, settings
 DEFAULT_FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
 
+
+RUSSIA = (
+    "Setting: present-day Russia. Russian city or town, Russian people, Russian apartment and office interiors, "
+    "Russian traffic police (DPS) uniform and cars, Russian cars and street furniture, Russian seasons and weather; "
+    "no American or European police, uniforms, cars or streets, no foreign brands"
+)
+
+
 @dataclass
 class ReelsSettings:
     enabled: bool = field(default_factory=lambda: _env_bool("REELS_ENABLED", False))
@@ -43,6 +51,9 @@ class ReelsSettings:
     openai_image_model: str = field(default_factory=lambda: _env("REELS_OPENAI_IMAGE_MODEL", "gpt-image-1"))
     # Sent as `size`; leave empty for models that do not accept it
     openai_image_size: str = field(default_factory=lambda: _env("REELS_OPENAI_IMAGE_SIZE", "1024x1536"))
+    # Where every generated scene takes place; added to picture and video prompts. The audience is in
+    # Russia, and models default to American/European streets, police and interiors. Empty = off
+    scene_context: str = field(default_factory=lambda: _env("REELS_SCENE_CONTEXT", RUSSIA))
     image_style: str = field(default_factory=lambda: _env(
         "REELS_IMAGE_STYLE", "vertical 9:16, cinematic, high detail, no text, no letters, no watermark"))
 

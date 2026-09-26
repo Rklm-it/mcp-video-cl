@@ -499,3 +499,46 @@ def test_openai_tts_gemini_voice_comes_as_wav(tmp_path, monkeypatch):
     assert out.read_bytes()[:3] == b"ID3" or out.read_bytes()[:2] in (b"\xff\xfb", b"\xff\xf3")
     assert probe_duration(out) == pytest.approx(1.5, abs=0.1) and len(words) == 3
     assert not out.with_suffix(".wav").exists()
+
+
+def test_scene_context_goes_into_picture_and_video_prompts(tmp_path, monkeypatch):
+    import httpx
+    from PIL import Image
+
+    from video_mcp.reels import images, video_gen
+
+    assert "Russia" in reels_settings.scene_context
+    monkeypatch.setattr(reels_settings, "scene_context", "Setting: Russia")
+    prompts = []
+    monkeypatch.setattr(reels_settings, "images", "pollinations")
+    monkeypatch.setattr(images, "_pollinations", lambda prompt, seed: prompts.append(prompt) or _png())
+    images.generate("courier on a bike", tmp_path / "p.png", 1)
+    assert prompts[0].startswith("courier on a bike. Setting: Russia. ")
+
+    monkeypatch.setattr(reels_settings, "scene_context", "")
+    images.generate("courier on a bike", tmp_path / "p.png", 1)
+    assert "Setting" not in prompts[1]
+
+    monkeypatch.setattr(reels_settings, "scene_context", "Setting: Russia")
+    monkeypatch.setattr(reels_settings, "video", "openai")
+    monkeypatch.setattr(reels_settings, "video_key", "k")
+    monkeypatch.setattr(video_gen, "POLL_SECONDS", 0)
+    sent = {}
+    monkeypatch.setattr(video_gen.httpx, "post", lambda url, **kw: sent.update(kw["json"])
+                        or httpx.Response(202, json={"id": "v"}))
+    monkeypatch.setattr(video_gen.net, "get", lambda url, **kw: httpx.Response(200, content=b"mp4")
+                        if "content" in url else httpx.Response(200, json={"status": "completed"}))
+    img = tmp_path / "f.png"
+    Image.new("RGB", (1080, 1920)).save(img)
+    video_gen.animate(img, "rider waves", 4, tmp_path / "o.mp4")
+    assert sent["prompt"].startswith("rider waves. Setting: Russia. ")
+
+
+def _png():
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (1080, 1920), "gray").save(buf, format="PNG")
+    return buf.getvalue()

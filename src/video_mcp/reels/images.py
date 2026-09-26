@@ -24,7 +24,7 @@ MAX_MEDIA_BYTES = 300 * 1024 * 1024
 def generate(prompt: str, out: Path, seed: int) -> Path:
     """Generate a 1080x1920 picture for `prompt` and save it as PNG."""
     provider = reels_settings.images
-    full = f"{prompt}. {reels_settings.image_style}" if reels_settings.image_style else prompt
+    full = ". ".join(filter(None, [prompt, reels_settings.scene_context, reels_settings.image_style]))
     if provider == "pollinations":
         return fit(_cut_watermark(Image.open(io.BytesIO(_pollinations(full, seed)))), out)
     elif provider == "gemini":
