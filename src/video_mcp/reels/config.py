@@ -48,7 +48,7 @@ class ReelsSettings:
 
     # Animated scenes: none | veo (Veo 3.1 image-to-video through the Gemini API, paid per second)
     video: str = field(default_factory=lambda: _env("REELS_VIDEO", "none"))
-    veo_model: str = field(default_factory=lambda: _env("REELS_VEO_MODEL", "veo-3.1-fast-generate-preview"))
+    veo_model: str = field(default_factory=lambda: _env("REELS_VEO_MODEL", "veo-3.1-lite-generate-preview"))
     veo_resolution: str = field(default_factory=lambda: _env("REELS_VEO_RESOLUTION", "720p"))
     # Every generated scene becomes video unless the script says animate=false
     animate_all: bool = field(default_factory=lambda: _env_bool("REELS_ANIMATE_ALL", False))

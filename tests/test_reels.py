@@ -238,7 +238,7 @@ def test_veo_request_flow_through_reseller(tmp_path, monkeypatch):
     video_gen.animate(img, "wallet", 5.1, tmp_path / "out.mp4")
 
     url, headers, body = seen["post"]
-    assert url == "https://api.example.ru/google/v1beta/models/veo-3.1-fast-generate-preview:predictLongRunning"
+    assert url == "https://api.example.ru/google/v1beta/models/veo-3.1-lite-generate-preview:predictLongRunning"
     assert headers == {"Authorization": "Bearer k123"}
     assert body["parameters"]["durationSeconds"] == 6 and body["parameters"]["aspectRatio"] == "9:16"
     assert seen["gets"][0] == "https://api.example.ru/google/v1beta/models/veo/operations/op1"
