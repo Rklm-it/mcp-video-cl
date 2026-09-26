@@ -26,7 +26,9 @@ def synthesize(text: str, out: Path) -> list[Word]:
         return asyncio.run(_edge(text, out))
     if provider == "elevenlabs":
         return _elevenlabs(text, out)
-    raise ValueError(f"Unknown REELS_TTS={provider!r} (use edge or elevenlabs)")
+    if provider == "openai":
+        return _openai(text, out)
+    raise ValueError(f"Unknown REELS_TTS={provider!r} (use edge, openai or elevenlabs)")
 
 
 async def _edge(text: str, out: Path) -> list[Word]:
@@ -69,6 +71,40 @@ def _elevenlabs(text: str, out: Path) -> list[Word]:
         alignment.get("character_start_times_seconds", []),
         alignment.get("character_end_times_seconds", []),
     )
+
+
+def _openai(text: str, out: Path) -> list[Word]:
+    """OpenAI-compatible /audio/speech. It returns no timings, so words are spread over the audio
+    by their length, which is close enough for 2-3 word subtitle lines."""
+    from ..frames import probe_duration
+
+    s = reels_settings
+    if not s.openai_key:
+        raise ValueError("Set REELS_OPENAI_API_KEY (and REELS_OPENAI_BASE_URL for a gateway)")
+    body = {"model": s.openai_tts_model, "voice": s.openai_tts_voice, "input": text, "response_format": "mp3"}
+    if s.openai_tts_instructions:
+        body["instructions"] = s.openai_tts_instructions
+    resp = httpx.post(f"{s.openai_base_url.rstrip('/')}/audio/speech",
+                      headers={"Authorization": f"Bearer {s.openai_key}"}, json=body, timeout=180)
+    if resp.status_code >= 400:
+        raise RuntimeError(f"Speech API error {resp.status_code}: {resp.text[:300]}")
+    out.write_bytes(resp.content)
+    return proportional_words(text, probe_duration(out))
+
+
+def proportional_words(text: str, duration: float, lead: float = 0.08, tail: float = 0.12) -> list[Word]:
+    """Word timings spread by word length (+1 for the gap) over the spoken part of the audio."""
+    parts = text.split()
+    if not parts:
+        return []
+    start, end = lead, max(lead + 0.2, duration - tail)
+    weights = [len(p) + 1 for p in parts]
+    per = (end - start) / sum(weights)
+    words, t = [], start
+    for p, w in zip(parts, weights):
+        words.append(Word(p, t, t + w * per))
+        t += w * per
+    return words
 
 
 def words_from_chars(chars: list[str], starts: list[float], ends: list[float]) -> list[Word]:

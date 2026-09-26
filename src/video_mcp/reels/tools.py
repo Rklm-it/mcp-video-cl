@@ -24,6 +24,7 @@ pictures, rendering and uploading.
 1. Write the script yourself: 4-7 scenes, 20-40 s in total. Scene 1 is the hook (a concrete number
    or a surprising claim in the first 2 seconds). Each scene = one or two short spoken sentences +
    an English image_prompt (no text in the picture) or `media` (a URL or a file from the video folder).
+   animate=true turns a scene into a short AI video (paid): use it for the hook, rarely more.
 2. Before calling create_reel, check facts and numbers, and remove promises of easy money, loans,
    microloans and first-person claims that are not true.
 3. Ads: only through a saved offer (save_offer) with its erid; mark the scenes that talk about the
@@ -43,6 +44,8 @@ class Scene(BaseModel):
     media: str | None = Field(None, description="Instead of generating: image/video URL or a file name "
                                                 "in the server's video folder (e.g. a clip made in Veo/Kling)")
     offer: bool = Field(False, description="Show the offer banner during this scene")
+    animate: bool = Field(False, description="Turn the picture into a short AI video (paid, REELS_VIDEO=veo). "
+                                             "Use for the hook scene and at most one more")
 
 
 class SceneEdit(BaseModel):
@@ -51,9 +54,17 @@ class SceneEdit(BaseModel):
     image_prompt: str | None = Field(None, description="New prompt: the picture is generated again")
     media: str | None = None
     offer: bool | None = None
+    animate: bool | None = None
 
 
 _registered = False
+
+
+def _check_animated(scenes: list[dict]) -> None:
+    count = sum(1 for s in scenes if s.get("animate"))
+    if count > reels_settings.max_animated:
+        raise ValueError(f"{count} animated scenes, the limit is {reels_settings.max_animated} per reel "
+                         "(REELS_MAX_ANIMATED) — each one is a paid video generation")
 
 
 def register(mcp: FastMCP, run) -> None:
@@ -79,12 +90,16 @@ def register(mcp: FastMCP, run) -> None:
         if job.get("offer_id"):
             lines.append(f"Offer: {job['offer_id']}")
         for i, s in enumerate(job["scenes"]):
-            flag = " [offer]" if s.get("offer") else ""
+            flag = (" [offer]" if s.get("offer") else "") + (" [video]" if s.get("animate") else "")
             lines.append(f"  {i}. {s['text']}{flag}")
         if job.get("published"):
             lines.append("Published: " + ", ".join(f"{k}: {v}" for k, v in job["published"].items()))
         if job.get("publish_errors"):
             lines.append("Publish errors: " + ", ".join(f"{k}: {v}" for k, v in job["publish_errors"].items()))
+        if job.get("music") and job["music"] != "none":
+            lines.append(f"Music: {job['music']}")
+        for w in job.get("warnings", []):
+            lines.append(f"Warning: {w}")
         if job.get("error"):
             lines.append(f"Error: {job['error']}")
         return "\n".join(lines)
@@ -99,6 +114,7 @@ def register(mcp: FastMCP, run) -> None:
             with jobs.lock(job["id"]):
                 job["status"] = "rendering"
                 job.pop("error", None)
+                job.pop("warnings", None)
                 jobs.save(job)
                 started = time.monotonic()
                 video = await run(render.render, job, workdir, offer, reporter)
@@ -137,6 +153,9 @@ def register(mcp: FastMCP, run) -> None:
         lines = [
             f"Voice: {s.tts}" + (f" ({s.edge_voice}, rate {s.edge_rate})" if s.tts == "edge" else ""),
             f"Pictures: {s.images}",
+            f"Video scenes: {s.video}" + (f" ({s.veo_model}, {s.veo_resolution}, max {s.max_animated} per reel)"
+                                          if s.video == "veo" else ""),
+            f"Music tracks: {len(s.music_tracks())}" + (f" in {s.music_dir}" if s.music_dir else " (REELS_MUSIC_DIR not set)"),
             f"Publish targets: {', '.join(s.publish_targets()) or 'none configured'}",
             f"Telegram review: {'on' if s.review_enabled else 'off'}",
             f"Reels: {counts or 'none yet'}",
@@ -171,6 +190,8 @@ def register(mcp: FastMCP, run) -> None:
         description: Annotated[str, Field(description="Post text under the video")] = "",
         hashtags: Annotated[list[str] | None, Field(description="Without #, e.g. ['деньги', 'лайфхаки']")] = None,
         offer_id: Annotated[str | None, Field(description="Saved offer for ad reels (see save_offer)")] = None,
+        music: Annotated[str | None, Field(description="Track name from the music folder, 'none' for no "
+                                                       "music; default: a random track")] = None,
         after: Annotated[
             Literal["none", "review", "publish"],
             Field(description="none = just render; review = send to the Telegram review chat; "
@@ -188,11 +209,12 @@ def register(mcp: FastMCP, run) -> None:
                 raise ValueError(f"Scene {i} needs image_prompt or media")
         if any(s["offer"] for s in items) and not offer_id:
             raise ValueError("Scenes are marked offer=true but no offer_id is given")
+        _check_animated(items)
         jobs.get_offer(offer_id)  # validate early
         job = {
             "id": jobs.new_id(), "created": time.strftime("%Y-%m-%d %H:%M:%S"), "status": "rendering",
             "title": title.strip(), "description": description.strip(), "hashtags": hashtags or [],
-            "offer_id": offer_id, "scenes": items,
+            "offer_id": offer_id, "scenes": items, "music": music,
         }
         jobs.save(job)
         return await build(job, after, ctx)
@@ -216,7 +238,7 @@ def register(mcp: FastMCP, run) -> None:
             if not 0 <= ch.index < len(job["scenes"]):
                 raise ValueError(f"No scene {ch.index}")
             scene = job["scenes"][ch.index]
-            for key in ("text", "image_prompt", "media", "offer"):
+            for key in ("text", "image_prompt", "media", "offer", "animate"):
                 value = getattr(ch, key)
                 if value is not None:
                     scene[key] = value
@@ -229,6 +251,7 @@ def register(mcp: FastMCP, run) -> None:
             job["description"] = description.strip()
         if any(s.get("offer") for s in job["scenes"]) and not job.get("offer_id"):
             raise ValueError("Scenes are marked offer=true but the reel has no offer")
+        _check_animated(job["scenes"])
         return await build(job, after, ctx)
 
     @mcp.tool(annotations=READ, structured_output=False)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import random
 import re
 import subprocess
 import zlib
@@ -13,7 +14,7 @@ from pathlib import Path
 from PIL import ImageFont
 
 from ..frames import probe_duration
-from . import images, tts
+from . import images, tts, video_gen
 from .config import reels_settings
 from .jobs import ad_marker
 
@@ -62,6 +63,19 @@ def render(job: dict, workdir: Path, offer: dict | None, progress: Callable[[flo
             visual, kind = png, "image"
         audio = stem.with_suffix(".mp3")
         words = tts.synthesize(scene["text"], audio)
+        if scene.get("animate") and kind == "image" and reels_settings.video != "none":
+            clip = stem.with_suffix(".ai.mp4")
+            if not clip.exists():
+                progress(0.05 + 0.6 * (i + 0.5) / len(scenes), f"Scene {i + 1}: generating video (1-3 min)")
+                try:
+                    video_gen.animate(visual, scene["image_prompt"] or scene["text"],
+                                      probe_duration(audio) + PAUSE, clip)
+                except Exception as exc:  # a still picture is better than a failed reel
+                    log.warning("Scene %s animation failed: %s", i, exc)
+                    job.setdefault("warnings", []).append(f"scene {i}: video generation failed, used the picture ({exc})"[:300])
+                    clip.unlink(missing_ok=True)
+            if clip.exists():
+                visual, kind = clip, "video"
         outs.append(SceneOut(visual, kind, audio, words))
 
     progress(0.7, "Joining the voice-over")
@@ -91,12 +105,41 @@ def render(job: dict, workdir: Path, offer: dict | None, progress: Callable[[flo
             vf.append(_drawtext(banner, size=_fit_size(offer["banner"], 46), color="black", box="0xFFD400@0.95", y="h-300",
                                 enable=enable))
     final = workdir / "reel.mp4"
-    _ff("-i", str(silent), "-i", str(voice), "-vf", ",".join(vf),
+    inputs = ["-i", str(silent), "-i", str(voice)]
+    graph = f"[0:v]{','.join(vf)}[v]"
+    audio_out = "1:a"
+    track = pick_music(job)
+    if track:
+        inputs += ["-stream_loop", "-1", "-i", str(track)]
+        fade = max(0.0, total - 1.5)
+        graph += (f";[2:a]volume={reels_settings.music_volume},afade=t=in:d=0.5,afade=t=out:st={fade:.2f}:d=1.5[m]"
+                  ";[1:a][m]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a]")
+        audio_out = "[a]"
+    _ff(*inputs, "-filter_complex", graph, "-map", "[v]", "-map", audio_out,
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "160k", "-t", f"{total:.3f}", "-movflags", "+faststart", str(final))
+        "-c:a", "aac", "-b:a", "160k", "-ar", "44100", "-t", f"{total:.3f}", "-movflags", "+faststart",
+        str(final))
     for leftover in (*clips, silent, concat):
         leftover.unlink(missing_ok=True)
     return final
+
+
+def pick_music(job: dict) -> Path | None:
+    """The job's chosen track, or a random one from REELS_MUSIC_DIR; job["music"] = "none" disables it."""
+    choice = job.get("music")
+    if choice == "none":
+        return None
+    tracks = reels_settings.music_tracks()
+    if not tracks:
+        return None
+    if choice:
+        for t in tracks:
+            if t.name == choice or t.stem == choice:
+                return t
+        raise ValueError(f"Music track {choice!r} not found in {reels_settings.music_dir}")
+    track = random.Random(job["id"]).choice(tracks)
+    job["music"] = track.name
+    return track
 
 
 def _join_voice(outs: list[SceneOut], workdir: Path) -> tuple[Path, list[tts.Word]]:
@@ -125,9 +168,11 @@ def _scene_clip(o: SceneOut, index: int, workdir: Path) -> Path:
     common = ["-t", f"{o.duration:.3f}", "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
               "-pix_fmt", "yuv420p", "-r", str(FPS)]
     if o.kind == "video":
-        _ff("-stream_loop", "-1", "-i", str(o.visual),
+        # clips shorter than the scene hold their last frame
+        _ff("-i", str(o.visual),
             "-vf", f"scale={images.W}:{images.H}:force_original_aspect_ratio=increase,"
-                   f"crop={images.W}:{images.H},fps={FPS},setsar=1", *common, str(out))
+                   f"crop={images.W}:{images.H},fps={FPS},setsar=1,tpad=stop_mode=clone:stop_duration=60",
+            *common, str(out))
     else:
         frames = max(1, round(o.duration * FPS))
         motion = _MOTIONS[index % len(_MOTIONS)].format(frames=frames)

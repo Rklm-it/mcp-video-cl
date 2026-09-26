@@ -13,6 +13,7 @@ import httpx
 from PIL import Image, ImageDraw, ImageFont
 
 from .. import sources as src_mod
+from . import gemini
 from .config import reels_settings
 
 W, H = 1080, 1920
@@ -59,12 +60,9 @@ def _pollinations(prompt: str, seed: int) -> bytes:
 
 
 def _gemini(prompt: str) -> bytes:
-    s = reels_settings
-    if not s.gemini_key:
-        raise ValueError("Set REELS_GEMINI_API_KEY")
     resp = httpx.post(
-        f"https://generativelanguage.googleapis.com/v1beta/models/{s.gemini_image_model}:generateContent",
-        headers={"x-goog-api-key": s.gemini_key},
+        gemini.url(f"models/{reels_settings.gemini_image_model}:generateContent"),
+        headers=gemini.headers(),
         json={
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"responseModalities": ["IMAGE"], "imageConfig": {"aspectRatio": "9:16"}},
@@ -88,7 +86,8 @@ def _openai(prompt: str) -> bytes:
     resp = httpx.post(
         f"{s.openai_base_url.rstrip('/')}/images/generations",
         headers={"Authorization": f"Bearer {s.openai_key}"},
-        json={"model": s.openai_image_model, "prompt": prompt, "size": "1024x1536", "n": 1},
+        json={"model": s.openai_image_model, "prompt": prompt, "n": 1,
+              **({"size": s.openai_image_size} if s.openai_image_size else {})},
         timeout=240,
     )
     if resp.status_code >= 400:

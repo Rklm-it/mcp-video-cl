@@ -125,3 +125,148 @@ async def test_scene_with_local_video_media(video_dir):
     res = await call("create_reel", title="Клип", scenes=[{"text": "Смотри внимательно.", "media": "colors.mp4"}])
     assert not res.isError, res.content[0].text
     assert "— ready" in res.content[0].text
+
+
+def make_clip(path, seconds=2, color="red"):
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi",
+                    "-i", f"color=c={color}:s=720x1280:d={seconds}:r=24", "-pix_fmt", "yuv420p", str(path)],
+                   check=True)
+    return path
+
+
+async def test_animated_scene_uses_generated_clip(monkeypatch):
+    from video_mcp.reels import video_gen
+
+    calls = []
+
+    def fake_animate(image, prompt, seconds, out):
+        calls.append((prompt, seconds))
+        return make_clip(out)
+
+    monkeypatch.setattr(reels_settings, "video", "veo")
+    monkeypatch.setattr(video_gen, "animate", fake_animate)
+    res = await call("create_reel", title="Хук", scenes=[
+        {"text": "Ты теряешь деньги каждый день.", "image_prompt": "wallet on fire", "animate": True},
+        {"text": "Вот почему.", "image_prompt": "calculator"},
+    ])
+    assert not res.isError, res.content[0].text
+    text = res.content[0].text
+    assert "[video]" in text and "Warning" not in text
+    assert calls and calls[0][0] == "wallet on fire" and calls[0][1] > 1.2
+    job_id = text.split()[1]
+    assert (jobs.job_dir(job_id) / "scene00.ai.mp4").exists()
+
+
+async def test_failed_animation_falls_back_to_picture(monkeypatch):
+    from video_mcp.reels import video_gen
+
+    def broken(*_args):
+        raise RuntimeError("quota exceeded")
+
+    monkeypatch.setattr(reels_settings, "video", "veo")
+    monkeypatch.setattr(video_gen, "animate", broken)
+    res = await call("create_reel", title="x", scenes=[{"text": "Текст.", "image_prompt": "p", "animate": True}])
+    assert not res.isError, res.content[0].text
+    assert "— ready" in res.content[0].text and "quota exceeded" in res.content[0].text
+
+
+async def test_animated_scene_limit(monkeypatch):
+    monkeypatch.setattr(reels_settings, "max_animated", 1)
+    res = await call("create_reel", title="x", scenes=[
+        {"text": "a", "image_prompt": "p", "animate": True}, {"text": "b", "image_prompt": "p", "animate": True}])
+    assert res.isError and "limit is 1" in res.content[0].text
+
+
+async def test_background_music_is_mixed(tmp_path, monkeypatch):
+    music = tmp_path / "music"
+    music.mkdir()
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi",
+                    "-i", "sine=frequency=660:duration=1", "-c:a", "libmp3lame", str(music / "calm.mp3")], check=True)
+    monkeypatch.setattr(reels_settings, "music_dir", str(music))
+    res = await call("create_reel", title="x", scenes=[{"text": "Музыка играет.", "image_prompt": "p"},
+                                                       {"text": "И дальше.", "image_prompt": "q"}])
+    assert not res.isError, res.content[0].text
+    assert "Music: calm.mp3" in res.content[0].text
+    job_id = res.content[0].text.split()[1]
+    info = probe(jobs.job_dir(job_id) / "reel.mp4")
+    assert float(info["format"]["duration"]) == pytest.approx(2 * 1.45, abs=0.3)
+
+    res = await call("create_reel", title="y", music="none", scenes=[{"text": "Тишина.", "image_prompt": "p"}])
+    assert not res.isError and "Music:" not in res.content[0].text
+
+
+def test_veo_request_flow_through_reseller(tmp_path, monkeypatch):
+    from PIL import Image
+
+    from video_mcp.reels import gemini, video_gen
+
+    monkeypatch.setattr(reels_settings, "gemini_key", "k123")
+    monkeypatch.setattr(reels_settings, "gemini_auth", "bearer")
+    monkeypatch.setattr(reels_settings, "gemini_base_url", "https://api.example.ru/google/v1beta")
+    monkeypatch.setattr(reels_settings, "video", "veo")
+    monkeypatch.setattr(video_gen, "POLL_SECONDS", 0)
+    seen = {}
+
+    class Resp:
+        def __init__(self, data, status=200):
+            self._data, self.status_code, self.text = data, status, json.dumps(data)
+
+        def json(self):
+            return self._data
+
+    def fake_post(url, headers, json, timeout):
+        seen["post"] = (url, headers, json)
+        return Resp({"name": "models/veo/operations/op1"})
+
+    polls = iter([{"done": False}, {"done": True, "response": {"generateVideoResponse": {"generatedSamples": [
+        {"video": {"uri": "https://generativelanguage.googleapis.com/v1beta/files/abc:download?alt=media"}}]}}}])
+
+    def fake_get(url, headers, timeout):
+        seen.setdefault("gets", []).append(url)
+        return Resp(next(polls))
+
+    def fake_download(uri, out):
+        seen["download"] = gemini.proxied(uri)
+        return make_clip(out)
+
+    monkeypatch.setattr(video_gen.httpx, "post", fake_post)
+    monkeypatch.setattr(video_gen.httpx, "get", fake_get)
+    monkeypatch.setattr(gemini, "download", fake_download)
+    img = tmp_path / "f.png"
+    Image.new("RGB", (1080, 1920), "blue").save(img)
+    video_gen.animate(img, "wallet", 5.1, tmp_path / "out.mp4")
+
+    url, headers, body = seen["post"]
+    assert url == "https://api.example.ru/google/v1beta/models/veo-3.1-fast-generate-preview:predictLongRunning"
+    assert headers == {"Authorization": "Bearer k123"}
+    assert body["parameters"]["durationSeconds"] == 6 and body["parameters"]["aspectRatio"] == "9:16"
+    assert seen["gets"][0] == "https://api.example.ru/google/v1beta/models/veo/operations/op1"
+    assert seen["download"] == "https://api.example.ru/google/v1beta/files/abc:download?alt=media"
+    assert video_gen.clip_seconds(3) == 4 and video_gen.clip_seconds(12) == 8
+
+
+def test_openai_compatible_tts_gateway(tmp_path, monkeypatch):
+    mp3 = tmp_path / "src.mp3"
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi",
+                    "-i", "sine=frequency=300:duration=2", "-c:a", "libmp3lame", str(mp3)], check=True)
+    seen = {}
+
+    class Resp:
+        status_code = 200
+        content = mp3.read_bytes()
+        text = ""
+
+    def fake_post(url, headers, json, timeout):
+        seen.update(url=url, headers=headers, body=json)
+        return Resp()
+
+    monkeypatch.setattr(reels_settings, "openai_key", "tw-key")
+    monkeypatch.setattr(reels_settings, "openai_base_url", "https://api.timeweb.ai/v1")
+    monkeypatch.setattr(tts.httpx, "post", fake_post)
+    words = tts._openai("Карта с кэшбэком вернёт часть трат", tmp_path / "out.mp3")
+    assert seen["url"] == "https://api.timeweb.ai/v1/audio/speech"
+    assert seen["headers"] == {"Authorization": "Bearer tw-key"}
+    assert seen["body"]["model"] == "gpt-4o-mini-tts" and seen["body"]["input"].startswith("Карта")
+    assert [w.text for w in words][0] == "Карта" and len(words) == 6
+    assert words[0].start == pytest.approx(0.08) and words[-1].end == pytest.approx(2 - 0.12, abs=0.1)
+    assert all(a.end == pytest.approx(b.start) for a, b in zip(words, words[1:]))
