@@ -38,6 +38,8 @@ ask REELS_TG_BOT_TOKEN "Токен Telegram-бота от @BotFather" secret
 while :; do
   ask REELS_TG_CHANNEL "Юзернейм канала для публикаций (с @, например @dohod_na_dostavke)"
   case "$(current REELS_TG_CHANNEL)" in
+    @*[Bb][Oo][Tt]) echo "  Это юзернейм бота, а нужен юзернейм КАНАЛА, куда бот будет публиковать ролики."
+       setv REELS_TG_CHANNEL "" ;;
     @*|-100*) break ;;
     *) echo "  Нужен юзернейм канала, он начинается с @ (не название бота и не название канала)."
        setv REELS_TG_CHANNEL "" ;;
