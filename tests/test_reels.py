@@ -145,7 +145,7 @@ async def test_animated_scene_uses_generated_clip(monkeypatch):
 
     monkeypatch.setattr(reels_settings, "video", "veo")
     monkeypatch.setattr(video_gen, "animate", fake_animate)
-    res = await call("create_reel", title="Хук", scenes=[
+    res = await call("create_reel", title="Хук", background=False, scenes=[
         {"text": "Ты теряешь деньги каждый день.", "image_prompt": "wallet on fire", "animate": True},
         {"text": "Вот почему.", "image_prompt": "calculator"},
     ])
@@ -165,7 +165,8 @@ async def test_failed_animation_falls_back_to_picture(monkeypatch):
 
     monkeypatch.setattr(reels_settings, "video", "veo")
     monkeypatch.setattr(video_gen, "animate", broken)
-    res = await call("create_reel", title="x", scenes=[{"text": "Текст.", "image_prompt": "p", "animate": True}])
+    res = await call("create_reel", title="x", background=False,
+                     scenes=[{"text": "Текст.", "image_prompt": "p", "animate": True}])
     assert not res.isError, res.content[0].text
     assert "— ready" in res.content[0].text and "quota exceeded" in res.content[0].text
 
@@ -270,3 +271,37 @@ def test_openai_compatible_tts_gateway(tmp_path, monkeypatch):
     assert [w.text for w in words][0] == "Карта" and len(words) == 6
     assert words[0].start == pytest.approx(0.08) and words[-1].end == pytest.approx(2 - 0.12, abs=0.1)
     assert all(a.end == pytest.approx(b.start) for a, b in zip(words, words[1:]))
+
+
+async def test_animate_all_renders_in_background(monkeypatch):
+    import asyncio
+
+    from video_mcp.reels import video_gen
+
+    calls = []
+
+    def fake_animate(image, prompt, seconds, out):
+        calls.append(prompt)
+        return make_clip(out, color="blue")
+
+    monkeypatch.setattr(reels_settings, "video", "veo")
+    monkeypatch.setattr(reels_settings, "animate_all", True)
+    monkeypatch.setattr(reels_settings, "max_animated", 8)
+    monkeypatch.setattr(video_gen, "animate", fake_animate)
+    res = await call("create_reel", title="Полное видео", scenes=[
+        {"text": "Первая сцена.", "image_prompt": "one"},
+        {"text": "Вторая сцена.", "image_prompt": "two"},
+        {"text": "Третья без видео.", "image_prompt": "three", "animate": False},
+    ])
+    assert not res.isError, res.content[0].text
+    text = res.content[0].text
+    assert "— rendering" in text and "Rendering in the background" in text
+    job_id = text.split()[1]
+    for _ in range(120):
+        if jobs.load(job_id)["status"] != "rendering":
+            break
+        await asyncio.sleep(0.25)
+    job = jobs.load(job_id)
+    assert job["status"] == "ready", job.get("error")
+    assert sorted(calls) == ["one", "two"]
+    assert [s["animate"] for s in job["scenes"]] == [True, True, False]

@@ -163,6 +163,16 @@ def send_for_review(job_id: str) -> None:
     _send_video(reels_settings.tg_review_chat, jobs.job_dir(job_id) / "reel.mp4", text, markup)
 
 
+def notify(text: str) -> None:
+    """Best-effort message to the review chat."""
+    if not reels_settings.review_enabled:
+        return
+    try:
+        _tg("sendMessage", json={"chat_id": reels_settings.tg_review_chat, "text": text})
+    except Exception as exc:
+        log.warning("Telegram notify failed: %s", exc)
+
+
 def _handle_callback(cq: dict) -> None:
     chat_id = str(cq.get("message", {}).get("chat", {}).get("id", ""))
     if chat_id != str(reels_settings.tg_review_chat):

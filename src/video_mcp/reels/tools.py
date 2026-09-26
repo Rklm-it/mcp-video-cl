@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+import threading
 import time
 from typing import Annotated, Literal
 
@@ -24,7 +25,8 @@ pictures, rendering and uploading.
 1. Write the script yourself: 4-7 scenes, 20-40 s in total. Scene 1 is the hook (a concrete number
    or a surprising claim in the first 2 seconds). Each scene = one or two short spoken sentences +
    an English image_prompt (no text in the picture) or `media` (a URL or a file from the video folder).
-   animate=true turns a scene into a short AI video (paid): use it for the hook, rarely more.
+   animate turns a scene into a short AI video (paid). With REELS_ANIMATE_ALL=1 every scene is video
+   by default; reels with video render in the background and take several minutes.
 2. Before calling create_reel, check facts and numbers, and remove promises of easy money, loans,
    microloans and first-person claims that are not true.
 3. Ads: only through a saved offer (save_offer) with its erid; mark the scenes that talk about the
@@ -44,8 +46,8 @@ class Scene(BaseModel):
     media: str | None = Field(None, description="Instead of generating: image/video URL or a file name "
                                                 "in the server's video folder (e.g. a clip made in Veo/Kling)")
     offer: bool = Field(False, description="Show the offer banner during this scene")
-    animate: bool = Field(False, description="Turn the picture into a short AI video (paid, REELS_VIDEO=veo). "
-                                             "Use for the hook scene and at most one more")
+    animate: bool | None = Field(None, description="Turn the picture into a short AI video (paid). "
+                                                   "Default: REELS_ANIMATE_ALL decides")
 
 
 class SceneEdit(BaseModel):
@@ -58,6 +60,10 @@ class SceneEdit(BaseModel):
 
 
 _registered = False
+
+
+def _has_video(scenes: list[dict]) -> bool:
+    return reels_settings.video != "none" and any(s.get("animate") for s in scenes)
 
 
 def _check_animated(scenes: list[dict]) -> None:
@@ -104,40 +110,20 @@ def register(mcp: FastMCP, run) -> None:
             lines.append(f"Error: {job['error']}")
         return "\n".join(lines)
 
-    async def build(job: dict, after: str, ctx: Context | None) -> list[ContentBlock]:
+    async def build(job: dict, after: str, ctx: Context | None, background: bool) -> list[ContentBlock]:
         from ..server import Reporter, _text
 
-        offer = jobs.get_offer(job.get("offer_id"))
-        workdir = jobs.job_dir(job["id"])
-        reporter = Reporter(ctx)
-        try:
-            with jobs.lock(job["id"]):
-                job["status"] = "rendering"
-                job.pop("error", None)
-                job.pop("warnings", None)
-                jobs.save(job)
-                started = time.monotonic()
-                video = await run(render.render, job, workdir, offer, reporter)
-                job["duration"] = round(fr.probe_duration(video), 2)
-                job["render_seconds"] = round(time.monotonic() - started, 1)
-                job["status"] = "ready"
-                jobs.save(job)
-        except Exception as exc:
-            job["status"] = "failed"
-            job["error"] = str(exc)[:500]
+        if background:
+            job["status"] = "rendering"
             jobs.save(job)
-            raise
-        note = ""
-        if after == "review":
-            if reels_settings.review_enabled:
-                await run(publish.send_for_review, job["id"])
-                note = "\nSent to the Telegram review chat: publish with the button there."
-            else:
-                note = "\nTelegram review chat is not configured; publish with publish_reel after approval."
-        elif after == "publish":
-            result = await run(publish.publish, job["id"])
-            job = jobs.load(job["id"])
-            note = f"\nPublish result: {result}"
+            threading.Thread(target=_process_quietly, args=(job, after), daemon=True,
+                             name=f"reel-{job['id']}").start()
+            where = ("It will arrive in the Telegram review chat when ready."
+                     if after == "review" and reels_settings.review_enabled else
+                     "Check it with get_reel in a few minutes.")
+            return [_text(summary(job) + f"\nRendering in the background (AI video takes a few minutes). {where}")]
+        note = await run(process, job, after, Reporter(ctx))
+        job = jobs.load(job["id"])
         blocks: list[ContentBlock] = [_text(summary(job) + note)]
         blocks += await run(previews, job["id"])
         return blocks
@@ -192,6 +178,8 @@ def register(mcp: FastMCP, run) -> None:
         offer_id: Annotated[str | None, Field(description="Saved offer for ad reels (see save_offer)")] = None,
         music: Annotated[str | None, Field(description="Track name from the music folder, 'none' for no "
                                                        "music; default: a random track")] = None,
+        background: Annotated[bool | None, Field(description="Render in the background and return at once. "
+                                                            "Default: yes when the reel has AI video scenes")] = None,
         after: Annotated[
             Literal["none", "review", "publish"],
             Field(description="none = just render; review = send to the Telegram review chat; "
@@ -202,6 +190,8 @@ def register(mcp: FastMCP, run) -> None:
         """Render a vertical reel (1080x1920): voice-over, animated pictures, subtitles and, for ad reels,
         the legal marking and offer banner. Returns the summary and preview frames. Takes 1-3 minutes."""
         items = [s.model_dump() for s in scenes]
+        for s in items:
+            s["animate"] = effective_animate(s)
         for i, s in enumerate(items):
             if not s["text"].strip():
                 raise ValueError(f"Scene {i} has no text")
@@ -217,7 +207,9 @@ def register(mcp: FastMCP, run) -> None:
             "offer_id": offer_id, "scenes": items, "music": music,
         }
         jobs.save(job)
-        return await build(job, after, ctx)
+        if background is None:
+            background = _has_video(items)
+        return await build(job, after, ctx, background)
 
     @mcp.tool(annotations=WRITE, structured_output=False)
     async def edit_reel(
@@ -252,7 +244,8 @@ def register(mcp: FastMCP, run) -> None:
         if any(s.get("offer") for s in job["scenes"]) and not job.get("offer_id"):
             raise ValueError("Scenes are marked offer=true but the reel has no offer")
         _check_animated(job["scenes"])
-        return await build(job, after, ctx)
+        jobs.save(job)
+        return await build(job, after, ctx, _has_video(job["scenes"]))
 
     @mcp.tool(annotations=READ, structured_output=False)
     async def list_reels(
@@ -314,6 +307,52 @@ def register(mcp: FastMCP, run) -> None:
         """Competitor research: the channel's most viewed recent videos (title, views, link).
         Watch the best ones with analyze_video to learn their hooks and structure."""
         return await run(_scout, url, limit, top)
+
+
+def process(job: dict, after: str, progress=lambda _f, _m: None) -> str:
+    """Render a reel and do the follow-up (review / publish). Returns a note for the summary."""
+    offer = jobs.get_offer(job.get("offer_id"))
+    workdir = jobs.job_dir(job["id"])
+    try:
+        with jobs.lock(job["id"]):
+            job["status"] = "rendering"
+            job.pop("error", None)
+            job.pop("warnings", None)
+            jobs.save(job)
+            started = time.monotonic()
+            video = render.render(job, workdir, offer, progress)
+            job["duration"] = round(fr.probe_duration(video), 2)
+            job["render_seconds"] = round(time.monotonic() - started, 1)
+            job["status"] = "ready"
+            jobs.save(job)
+    except Exception as exc:
+        job["status"] = "failed"
+        job["error"] = str(exc)[:500]
+        jobs.save(job)
+        raise
+    if after == "review":
+        if reels_settings.review_enabled:
+            publish.send_for_review(job["id"])
+            return "\nSent to the Telegram review chat: publish with the button there."
+        return "\nTelegram review chat is not configured; publish with publish_reel after approval."
+    if after == "publish":
+        return f"\nPublish result: {publish.publish(job['id'])}"
+    return ""
+
+
+def _process_quietly(job: dict, after: str) -> None:
+    try:
+        process(job, after)
+    except Exception as exc:
+        log.warning("Background reel %s failed: %s", job["id"], exc)
+        publish.notify(f"Ролик {job['id']} «{job['title']}» не собрался: {str(exc)[:300]}")
+
+
+def effective_animate(scene: dict) -> bool:
+    """Explicit flag wins; otherwise REELS_ANIMATE_ALL decides (user video clips are never re-animated)."""
+    if scene.get("animate") is not None:
+        return bool(scene["animate"])
+    return reels_settings.animate_all and reels_settings.video != "none"
 
 
 def _scout(url: str, limit: int, top: int) -> str:

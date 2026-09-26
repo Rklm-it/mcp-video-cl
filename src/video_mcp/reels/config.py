@@ -50,8 +50,12 @@ class ReelsSettings:
     video: str = field(default_factory=lambda: _env("REELS_VIDEO", "none"))
     veo_model: str = field(default_factory=lambda: _env("REELS_VEO_MODEL", "veo-3.1-fast-generate-preview"))
     veo_resolution: str = field(default_factory=lambda: _env("REELS_VEO_RESOLUTION", "720p"))
-    # Cost guard: at most this many animated scenes per reel
-    max_animated: int = field(default_factory=lambda: _env_int("REELS_MAX_ANIMATED", 2))
+    # Every generated scene becomes video unless the script says animate=false
+    animate_all: bool = field(default_factory=lambda: _env_bool("REELS_ANIMATE_ALL", False))
+    # Cost guard: at most this many animated scenes per reel (default 8 with ANIMATE_ALL, else 2)
+    max_animated: int = field(default_factory=lambda: _env_int("REELS_MAX_ANIMATED", 0))
+    # Parallel video generations per reel
+    video_workers: int = field(default_factory=lambda: _env_int("REELS_VIDEO_WORKERS", 4))
 
     # Background music: a folder with mp3/m4a/wav tracks you are allowed to use
     # (e.g. from the YouTube Audio Library); a random one is mixed under the voice
@@ -70,6 +74,10 @@ class ReelsSettings:
     yt_client_secret: str = field(default_factory=lambda: _env("REELS_YT_CLIENT_SECRET"))
     yt_refresh_token: str = field(default_factory=lambda: _env("REELS_YT_REFRESH_TOKEN"))
     yt_privacy: str = field(default_factory=lambda: _env("REELS_YT_PRIVACY", "public"))
+
+    def __post_init__(self) -> None:
+        if self.max_animated <= 0:
+            self.max_animated = 8 if self.animate_all else 2
 
     @property
     def root(self) -> Path:

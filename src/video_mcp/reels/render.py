@@ -7,6 +7,7 @@ import random
 import re
 import subprocess
 import zlib
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,33 +51,19 @@ def _ff(*args: str) -> None:
 
 def render(job: dict, workdir: Path, offer: dict | None, progress: Callable[[float, str], None]) -> Path:
     scenes = job["scenes"]
-    outs: list[SceneOut] = []
-    for i, scene in enumerate(scenes):
-        progress(0.05 + 0.6 * i / len(scenes), f"Scene {i + 1}/{len(scenes)}: picture and voice")
-        stem = workdir / f"scene{i:02d}"
-        if scene.get("media"):
-            visual, kind = images.fetch_media(scene["media"], stem)
-        else:
-            png = stem.with_suffix(".png")
-            if not png.exists():  # keep pictures when a reel is re-rendered
-                images.generate(scene["image_prompt"], png, seed=zlib.crc32(f"{job['id']}:{i}".encode()))
-            visual, kind = png, "image"
-        audio = stem.with_suffix(".mp3")
-        words = tts.synthesize(scene["text"], audio)
-        if scene.get("animate") and kind == "image" and reels_settings.video != "none":
-            clip = stem.with_suffix(".ai.mp4")
-            if not clip.exists():
-                progress(0.05 + 0.6 * (i + 0.5) / len(scenes), f"Scene {i + 1}: generating video (1-3 min)")
-                try:
-                    video_gen.animate(visual, scene["image_prompt"] or scene["text"],
-                                      probe_duration(audio) + PAUSE, clip)
-                except Exception as exc:  # a still picture is better than a failed reel
-                    log.warning("Scene %s animation failed: %s", i, exc)
-                    job.setdefault("warnings", []).append(f"scene {i}: video generation failed, used the picture ({exc})"[:300])
-                    clip.unlink(missing_ok=True)
-            if clip.exists():
-                visual, kind = clip, "video"
-        outs.append(SceneOut(visual, kind, audio, words))
+    progress(0.05, f"Pictures and voice for {len(scenes)} scenes")
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        outs = list(pool.map(lambda i: _prepare_scene(job, i, workdir), range(len(scenes))))
+
+    todo = [i for i, (scene, o) in enumerate(zip(scenes, outs))
+            if scene.get("animate") and o.kind == "image" and reels_settings.video != "none"]
+    if todo:
+        progress(0.3, f"Generating video for {len(todo)} scenes (a few minutes)")
+        with ThreadPoolExecutor(max_workers=max(1, reels_settings.video_workers)) as pool:
+            clips = dict(zip(todo, pool.map(lambda i: _animate_scene(job, i, outs[i], workdir), todo)))
+        for i, clip in clips.items():
+            if clip:
+                outs[i].visual, outs[i].kind = clip, "video"
 
     progress(0.7, "Joining the voice-over")
     voice, words = _join_voice(outs, workdir)
@@ -140,6 +127,37 @@ def pick_music(job: dict) -> Path | None:
     track = random.Random(job["id"]).choice(tracks)
     job["music"] = track.name
     return track
+
+
+def _prepare_scene(job: dict, i: int, workdir: Path) -> SceneOut:
+    scene = job["scenes"][i]
+    stem = workdir / f"scene{i:02d}"
+    if scene.get("media"):
+        visual, kind = images.fetch_media(scene["media"], stem)
+    else:
+        png = stem.with_suffix(".png")
+        if not png.exists():  # keep pictures when a reel is re-rendered
+            images.generate(scene["image_prompt"], png, seed=zlib.crc32(f"{job['id']}:{i}".encode()))
+        visual, kind = png, "image"
+    audio = stem.with_suffix(".mp3")
+    words = tts.synthesize(scene["text"], audio)
+    return SceneOut(visual, kind, audio, words)
+
+
+def _animate_scene(job: dict, i: int, o: SceneOut, workdir: Path) -> Path | None:
+    """AI video for a scene, cached between re-renders; None (keep the picture) if generation fails."""
+    scene = job["scenes"][i]
+    clip = workdir / f"scene{i:02d}.ai.mp4"
+    if clip.exists():
+        return clip
+    try:
+        return video_gen.animate(o.visual, scene["image_prompt"] or scene["text"],
+                                 probe_duration(o.audio) + PAUSE, clip)
+    except Exception as exc:  # a still picture is better than a failed reel
+        log.warning("Scene %s animation failed: %s", i, exc)
+        job.setdefault("warnings", []).append(f"scene {i}: video generation failed, used the picture ({exc})"[:300])
+        clip.unlink(missing_ok=True)
+        return None
 
 
 def _join_voice(outs: list[SceneOut], workdir: Path) -> tuple[Path, list[tts.Word]]:
