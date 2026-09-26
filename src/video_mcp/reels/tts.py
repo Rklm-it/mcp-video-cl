@@ -7,8 +7,7 @@ import base64
 from dataclasses import dataclass
 from pathlib import Path
 
-import httpx
-
+from . import net
 from .config import reels_settings
 
 
@@ -54,7 +53,7 @@ def _elevenlabs(text: str, out: Path) -> list[Word]:
     s = reels_settings
     if not (s.elevenlabs_key and s.elevenlabs_voice):
         raise ValueError("Set REELS_ELEVENLABS_API_KEY and REELS_ELEVENLABS_VOICE_ID")
-    resp = httpx.post(
+    resp = net.post(
         f"https://api.elevenlabs.io/v1/text-to-speech/{s.elevenlabs_voice}/with-timestamps",
         params={"output_format": "mp3_44100_128"},
         headers={"xi-api-key": s.elevenlabs_key},
@@ -84,8 +83,12 @@ def _openai(text: str, out: Path) -> list[Word]:
     body = {"model": s.openai_tts_model, "voice": s.openai_tts_voice, "input": text, "response_format": "mp3"}
     if s.openai_tts_instructions:
         body["instructions"] = s.openai_tts_instructions
-    resp = httpx.post(f"{s.openai_base_url.rstrip('/')}/audio/speech",
-                      headers={"Authorization": f"Bearer {s.openai_key}"}, json=body, timeout=180)
+    url, auth = f"{s.openai_base_url.rstrip('/')}/audio/speech", {"Authorization": f"Bearer {s.openai_key}"}
+    resp = net.post(url, headers=auth, json=body, timeout=180)
+    if net.retryable(resp) and "instructions" in body:
+        # Some gateways fail on the voice-style field: better a plainer voice than no reel
+        body.pop("instructions")
+        resp = net.post(url, headers=auth, json=body, timeout=180)
     if resp.status_code >= 400:
         raise RuntimeError(f"Speech API error {resp.status_code}: {resp.text[:300]}")
     out.write_bytes(resp.content)

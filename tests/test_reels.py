@@ -234,7 +234,7 @@ def test_veo_request_flow_through_reseller(tmp_path, monkeypatch):
         return make_clip(out)
 
     monkeypatch.setattr(video_gen.httpx, "post", fake_post)
-    monkeypatch.setattr(video_gen.httpx, "get", fake_get)
+    monkeypatch.setattr(video_gen.net, "get", fake_get)
     monkeypatch.setattr(gemini, "download", fake_download)
     img = tmp_path / "f.png"
     Image.new("RGB", (1080, 1920), "blue").save(img)
@@ -266,7 +266,7 @@ def test_openai_compatible_tts_gateway(tmp_path, monkeypatch):
 
     monkeypatch.setattr(reels_settings, "openai_key", "tw-key")
     monkeypatch.setattr(reels_settings, "openai_base_url", "https://api.timeweb.ai/v1")
-    monkeypatch.setattr(tts.httpx, "post", fake_post)
+    monkeypatch.setattr(tts.net, "post", fake_post)
     words = tts._openai("Карта с кэшбэком вернёт часть трат", tmp_path / "out.mp3")
     assert seen["url"] == "https://api.timeweb.ai/v1/audio/speech"
     assert seen["headers"] == {"Authorization": "Bearer tw-key"}
@@ -349,35 +349,57 @@ def test_cleanup_old_drops_media_of_old_published_reels(tmp_path):
     assert not jobs.job_dir(failed["id"]).exists()
 
 
-def test_pollinations_retries_server_errors(monkeypatch):
+def test_net_retries_server_errors(monkeypatch):
     import httpx
 
-    from video_mcp.reels import images
+    from video_mcp.reels import net
 
-    answers = [httpx.Response(500), httpx.ConnectError("reset"), httpx.Response(200, content=b"png")]
+    answers = []
     calls = []
 
-    def fake_get(url, **kwargs):
+    def fake_request(method, url, **kwargs):
         calls.append(url)
         answer = answers.pop(0)
         if isinstance(answer, Exception):
             raise answer
-        answer.request = httpx.Request("GET", url)
         return answer
 
-    monkeypatch.setattr(images.httpx, "get", fake_get)
-    monkeypatch.setattr(images.time, "sleep", lambda s: None)
-    assert images._pollinations("cat", 1) == b"png"
-    assert len(calls) == 3
+    monkeypatch.setattr(net.httpx, "request", fake_request)
+    monkeypatch.setattr(net.time, "sleep", lambda s: None)
+    answers[:] = [httpx.Response(500), httpx.ConnectError("reset"), httpx.Response(429), httpx.Response(200)]
+    assert net.get("https://x").status_code == 200
+    assert len(calls) == 4
 
-    monkeypatch.setattr(images, "POLLINATIONS_RETRY_DELAYS", (1,))
+    monkeypatch.setattr(net, "RETRY_DELAYS", (1,))
     answers[:] = [httpx.Response(502), httpx.Response(502)]
-    with pytest.raises(httpx.HTTPStatusError):
-        images._pollinations("cat", 1)
+    assert net.post("https://x").status_code == 502
+    answers[:] = [httpx.ConnectError("a"), httpx.ConnectError("b")]
+    with pytest.raises(httpx.ConnectError):
+        net.get("https://x")
     answers[:] = [httpx.Response(400)]
-    with pytest.raises(httpx.HTTPStatusError):
-        images._pollinations("cat", 1)
+    assert net.get("https://x").status_code == 400
     assert answers == []
+
+
+def test_openai_tts_drops_instructions_when_gateway_fails(monkeypatch, tmp_path):
+    import httpx
+
+    from video_mcp import frames
+    from video_mcp.reels import net
+
+    bodies = []
+
+    def fake_post(url, json, **kwargs):
+        bodies.append(dict(json))
+        return httpx.Response(500 if "instructions" in json else 200, content=b"mp3")
+
+    monkeypatch.setattr(reels_settings, "openai_key", "k")
+    monkeypatch.setattr(reels_settings, "openai_tts_instructions", "бодро")
+    monkeypatch.setattr(net, "post", fake_post)
+    monkeypatch.setattr(frames, "probe_duration", lambda path: 2.0)
+    words = tts._openai("раз два", tmp_path / "v.mp3")
+    assert [w.text for w in words] == ["раз", "два"]
+    assert "instructions" in bodies[0] and "instructions" not in bodies[1]
 
 
 def test_pollinations_watermark_strip_is_cut(monkeypatch, tmp_path):

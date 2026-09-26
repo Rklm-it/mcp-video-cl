@@ -11,7 +11,7 @@ from pathlib import Path
 import httpx
 from PIL import Image
 
-from . import gemini
+from . import gemini, net
 from .config import reels_settings
 
 log = logging.getLogger("video_mcp.reels")
@@ -56,7 +56,10 @@ def _veo(image: Path, prompt: str, seconds: int, out: Path) -> Path:
     deadline = time.monotonic() + TIMEOUT_SECONDS
     while True:
         time.sleep(POLL_SECONDS)
-        op = httpx.get(gemini.url(name), headers=gemini.headers(), timeout=60).json()
+        poll = net.get(gemini.url(name), headers=gemini.headers(), timeout=60)
+        if poll.status_code >= 400:
+            raise RuntimeError(f"Veo status error {poll.status_code}: {poll.text[:300]}")
+        op = poll.json()
         if op.get("error"):
             raise RuntimeError(f"Veo failed: {op['error'].get('message', op['error'])}")
         if op.get("done"):

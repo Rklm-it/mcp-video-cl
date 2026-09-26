@@ -6,7 +6,6 @@ import base64
 import io
 import random
 import textwrap
-import time
 from pathlib import Path
 from urllib.parse import quote, urlparse
 
@@ -14,7 +13,7 @@ import httpx
 from PIL import Image, ImageDraw, ImageFont
 
 from .. import sources as src_mod
-from . import gemini
+from . import gemini, net
 from .config import reels_settings
 
 W, H = 1080, 1920
@@ -58,33 +57,19 @@ def _cut_watermark(image: Image.Image) -> Image.Image:
     return image.crop((0, 0, image.width, round(image.height * (1 - POLLINATIONS_WATERMARK))))
 
 
-# The free Pollinations API often answers 5xx/429 for a while: wait and ask again
-POLLINATIONS_RETRY_DELAYS = (5, 15, 30, 60)
-
-
 def _pollinations(prompt: str, seed: int) -> bytes:
-    for delay in (*POLLINATIONS_RETRY_DELAYS, None):
-        try:
-            resp = httpx.get(
-                f"https://image.pollinations.ai/prompt/{quote(prompt)}",
-                params={"width": W, "height": H, "nologo": "true", "seed": seed},
-                timeout=180,
-                follow_redirects=True,
-            )
-            if resp.status_code != 429 and resp.status_code < 500:
-                resp.raise_for_status()
-                return resp.content
-            if delay is None:
-                resp.raise_for_status()
-        except httpx.TransportError:
-            if delay is None:
-                raise
-        time.sleep(delay)
-    raise AssertionError("unreachable")
+    resp = net.get(
+        f"https://image.pollinations.ai/prompt/{quote(prompt)}",
+        params={"width": W, "height": H, "nologo": "true", "seed": seed},
+        timeout=180,
+        follow_redirects=True,
+    )
+    resp.raise_for_status()
+    return resp.content
 
 
 def _gemini(prompt: str) -> bytes:
-    resp = httpx.post(
+    resp = net.post(
         gemini.url(f"models/{reels_settings.gemini_image_model}:generateContent"),
         headers=gemini.headers(),
         json={
@@ -107,7 +92,7 @@ def _openai(prompt: str) -> bytes:
     s = reels_settings
     if not s.openai_key:
         raise ValueError("Set REELS_OPENAI_API_KEY")
-    resp = httpx.post(
+    resp = net.post(
         f"{s.openai_base_url.rstrip('/')}/images/generations",
         headers={"Authorization": f"Bearer {s.openai_key}"},
         json={"model": s.openai_image_model, "prompt": prompt, "n": 1,
@@ -119,7 +104,7 @@ def _openai(prompt: str) -> bytes:
     item = resp.json()["data"][0]
     if item.get("b64_json"):
         return base64.b64decode(item["b64_json"])
-    return httpx.get(item["url"], timeout=120).content
+    return net.get(item["url"], timeout=120).content
 
 
 def placeholder(text: str, out: Path, seed: int) -> Path:
