@@ -35,20 +35,33 @@ echo
 ask REELS_OPENAI_API_KEY "Ключ Timeweb AI Gateway (голос)" secret
 ask REELS_GEMINI_API_KEY "Ключ ProxyAPI (видео Veo)" secret
 ask REELS_TG_BOT_TOKEN "Токен Telegram-бота от @BotFather" secret
-ask REELS_TG_CHANNEL "Канал для публикаций, например @dohod_dostavka"
+while :; do
+  ask REELS_TG_CHANNEL "Юзернейм канала для публикаций (с @, например @dohod_na_dostavke)"
+  case "$(current REELS_TG_CHANNEL)" in
+    @*|-100*) break ;;
+    *) echo "  Нужен юзернейм канала, он начинается с @ (не название бота и не название канала)."
+       setv REELS_TG_CHANNEL "" ;;
+  esac
+done
 
 if [ -z "$(current REELS_TG_REVIEW_CHAT_ID)" ]; then
   echo
   echo "Напишите своему боту в Telegram команду /start, потом нажмите Enter."
   read -r _
   token="$(current REELS_TG_BOT_TOKEN)"
-  chat="$(curl -fsS "https://api.telegram.org/bot${token}/getUpdates" \
-    | grep -o '"chat":{"id":[0-9]*' | tail -n1 | grep -o '[0-9]*$' || true)"
+  reply="$(curl -sS --max-time 20 "https://api.telegram.org/bot${token}/getUpdates" 2>&1 || true)"
+  chat="$(printf '%s' "$reply" | grep -o '"chat":{"id":[0-9]*' | tail -n1 | grep -o '[0-9]*$' || true)"
   if [ -n "$chat" ]; then
     echo "Нашёл ваш чат: $chat"
     setv REELS_TG_REVIEW_CHAT_ID "$chat"
   else
-    ask REELS_TG_REVIEW_CHAT_ID "Не нашёл чат автоматически. Введите chat id вручную"
+    case "$reply" in
+      *'"ok":true'*) echo "Бот не получил /start. Id можно узнать у @userinfobot в Telegram." ;;
+      *'"ok":false'*) echo "Telegram отклонил токен: $(printf '%s' "$reply" | grep -o '"description":"[^"]*"')" ;;
+      *) echo "Сервер не смог связаться с api.telegram.org — без этого бот не сможет присылать ролики."
+         echo "Ответ: ${reply:0:200}" ;;
+    esac
+    ask REELS_TG_REVIEW_CHAT_ID "Введите chat id вручную (число от @userinfobot)"
   fi
 fi
 
