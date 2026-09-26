@@ -65,8 +65,8 @@ forbidden_words: работ, подработ, трудоустр, зарпла�
 | Что | Сервис | Цена |
 |---|---|---|
 | Сценарии, проверка, оркестрация | Claude + MCP этого сервера | в подписке Claude |
-| Голос | Timeweb AI Gateway, `gpt-4o-mini-tts` (OpenAI-совместимый `https://api.timeweb.ai/v1`) | ~1 ₽ за ролик |
-| Первый кадр сцены | Pollinations (бесплатно); запасной вариант — картинки Timeweb | 0 ₽ (или +15–20 ₽) |
+| Голос | Timeweb AI Gateway, `openai/gpt-4o-mini-tts` — имя с префиксом, без него Timeweb отвечает 500 (OpenAI-совместимый `https://api.timeweb.ai/v1`) | ~1 ₽ за ролик |
+| Первый кадр сцены | Gemini (Nano Banana) через ProxyAPI, `REELS_IMAGES=gemini`. Pollinations с VPS не годится: 500/429 и свой логотип на картинке | несколько ₽ за кадр |
 | Видео сцен | **Veo 3.1 Lite 720p через ProxyAPI** (`https://api.proxyapi.ru/google/v1beta`, auth bearer) | **4,11 ₽/сек** |
 | Музыка | фонотека YouTube (Audio Library), папка `data/music` | 0 ₽ |
 | Сборка, публикация | ffmpeg на VPS, Telegram Bot API, YouTube Data API | 0 ₽ |

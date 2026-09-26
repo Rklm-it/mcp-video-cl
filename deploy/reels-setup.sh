@@ -71,6 +71,8 @@ fi
 setv REELS_ENABLED 1
 setv REELS_TTS openai
 setv REELS_OPENAI_BASE_URL https://api.timeweb.ai/v1
+# Timeweb names models with the provider prefix; without it the speech API answers 500
+[ -n "$(current REELS_OPENAI_TTS_MODEL)" ] || setv REELS_OPENAI_TTS_MODEL openai/gpt-4o-mini-tts
 [ -n "$(current REELS_IMAGES)" ] || setv REELS_IMAGES pollinations
 setv REELS_VIDEO veo
 setv REELS_ANIMATE_ALL 1
