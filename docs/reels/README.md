@@ -104,11 +104,18 @@ Veo 3.1 Fast стоит 11,58 ₽/сек, обычный Veo 3.1 — 27,37 ₽/�
 - [x] Фабрика рилсов в коде: `src/video_mcp/reels`, тесты `tests/test_reels.py`
 - [x] Оффер выбран, ссылка с метками проверена
 - [x] 10 сценариев: `docs/reels/scripts-couriers-01-10.md`
-- [ ] Юрлицо рекламодателя (ждём поддержку Pampadu)
-- [ ] Ключи ProxyAPI (пополнить 1 000 ₽) и Timeweb AI Gateway (~100 ₽)
-- [ ] Telegram-канал и бот (админ канала), VK-сообщество, YouTube-канал
-- [ ] Музыка в `data/music`
-- [ ] На сервере: `git fetch && git checkout main && sudo bash deploy/reels-setup.sh`
-- [ ] Проверка `reels_setup`, `save_offer`, тестовый ролик без видео, ролик №1 с видео и сверка списания
+- [x] Ключи ProxyAPI и Timeweb AI Gateway записаны в `.env` на сервере
+- [x] Telegram: канал **@dohod_na_dostavke**, бот **@dohod_dostavka_studio_bot** (админ канала),
+      черновики приходят владельцу в личку (chat id записан в `.env`)
+- [x] Сервер обновлён и пересобран (26.09.2026) с `REELS_ENABLED=1`. Адрес коннектора и токен —
+      в `/opt/video-mcp/CONNECT.txt` на сервере. Диск VPS всего 10 ГБ: фабрика сама чистит старые файлы
+      (`REELS_KEEP_DAYS`)
+- [ ] **Следующий шаг (новая сессия с подключённым коннектором Video):** `reels_setup` → тестовый ролик
+      без оффера (например, сценарий 3 «Самозанятость за 10 минут») → проверить черновик в Telegram
+      и списание в ProxyAPI (~100 ₽). Если Veo ответит ошибкой модели — `REELS_VEO_MODEL=google/veo-3.1-lite`
+      в `.env` и `docker compose up -d`
+- [ ] Юрлицо рекламодателя (ждём поддержку Pampadu) → `save_offer` (параметры выше) → ролики с оффером
+- [ ] Музыка в `/opt/video-mcp/data/music` (пока 0 треков, ролики собираются без музыки)
+- [ ] VK-сообщество и YouTube-канал; позже YouTube (`video-mcp-youtube-auth`)
 - [ ] Ежедневное расписание: Claude пишет ролики, черновики сами приходят в Telegram на проверку
-- [ ] Позже: YouTube (`video-mcp-youtube-auth`), статистика Pampadu, лендинги Киргизии и Беларуси
+- [ ] Позже: статистика Pampadu, лендинги Киргизии и Беларуси
