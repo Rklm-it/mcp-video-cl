@@ -6,6 +6,7 @@ import base64
 import io
 import random
 import textwrap
+import time
 from pathlib import Path
 from urllib.parse import quote, urlparse
 
@@ -48,15 +49,29 @@ def fit(image: Image.Image, out: Path) -> Path:
     return out
 
 
+# The free Pollinations API often answers 5xx/429 for a while: wait and ask again
+POLLINATIONS_RETRY_DELAYS = (5, 15, 30, 60)
+
+
 def _pollinations(prompt: str, seed: int) -> bytes:
-    resp = httpx.get(
-        f"https://image.pollinations.ai/prompt/{quote(prompt)}",
-        params={"width": W, "height": H, "nologo": "true", "seed": seed},
-        timeout=180,
-        follow_redirects=True,
-    )
-    resp.raise_for_status()
-    return resp.content
+    for delay in (*POLLINATIONS_RETRY_DELAYS, None):
+        try:
+            resp = httpx.get(
+                f"https://image.pollinations.ai/prompt/{quote(prompt)}",
+                params={"width": W, "height": H, "nologo": "true", "seed": seed},
+                timeout=180,
+                follow_redirects=True,
+            )
+            if resp.status_code != 429 and resp.status_code < 500:
+                resp.raise_for_status()
+                return resp.content
+            if delay is None:
+                resp.raise_for_status()
+        except httpx.TransportError:
+            if delay is None:
+                raise
+        time.sleep(delay)
+    raise AssertionError("unreachable")
 
 
 def _gemini(prompt: str) -> bytes:

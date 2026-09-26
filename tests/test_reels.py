@@ -347,3 +347,34 @@ def test_cleanup_old_drops_media_of_old_published_reels(tmp_path):
     assert not (jobs.job_dir(old["id"]) / "reel.mp4").exists() and (jobs.job_dir(old["id"]) / "job.json").exists()
     assert (jobs.job_dir(fresh["id"]) / "reel.mp4").exists()
     assert not jobs.job_dir(failed["id"]).exists()
+
+
+def test_pollinations_retries_server_errors(monkeypatch):
+    import httpx
+
+    from video_mcp.reels import images
+
+    answers = [httpx.Response(500), httpx.ConnectError("reset"), httpx.Response(200, content=b"png")]
+    calls = []
+
+    def fake_get(url, **kwargs):
+        calls.append(url)
+        answer = answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        answer.request = httpx.Request("GET", url)
+        return answer
+
+    monkeypatch.setattr(images.httpx, "get", fake_get)
+    monkeypatch.setattr(images.time, "sleep", lambda s: None)
+    assert images._pollinations("cat", 1) == b"png"
+    assert len(calls) == 3
+
+    monkeypatch.setattr(images, "POLLINATIONS_RETRY_DELAYS", (1,))
+    answers[:] = [httpx.Response(502), httpx.Response(502)]
+    with pytest.raises(httpx.HTTPStatusError):
+        images._pollinations("cat", 1)
+    answers[:] = [httpx.Response(400)]
+    with pytest.raises(httpx.HTTPStatusError):
+        images._pollinations("cat", 1)
+    assert answers == []
