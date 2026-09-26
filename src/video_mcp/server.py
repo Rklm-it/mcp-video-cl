@@ -465,6 +465,16 @@ async def list_local_videos() -> str:
     return "\n".join(f"{p.relative_to(base)}  ({p.stat().st_size / 1e6:.1f} MB)" for p in files)
 
 
+# ---------------------------------------------------------------- reels factory (optional)
+
+from .reels.config import reels_settings  # noqa: E402
+
+if reels_settings.enabled:
+    from .reels import tools as reels_tools
+
+    reels_tools.register(mcp, _run)
+
+
 # ---------------------------------------------------------------- HTTP app & auth
 
 
@@ -541,6 +551,12 @@ def main() -> None:
     settings.cache_dir.mkdir(parents=True, exist_ok=True)
     settings.local_video_dir.mkdir(parents=True, exist_ok=True)
     src_mod.cleanup_cache()
+    if reels_settings.enabled:
+        from .reels import publish as reels_publish
+
+        reels_settings.jobs_dir.mkdir(parents=True, exist_ok=True)
+        reels_tools.cleanup_failed()
+        reels_publish.start_review_bot()
     if args.transport == "stdio":
         mcp.run("stdio")
         return

@@ -1,0 +1,328 @@
+"""MCP tools of the reels factory, added to the video server when REELS_ENABLED=1."""
+
+from __future__ import annotations
+
+import logging
+import shutil
+import time
+from typing import Annotated, Literal
+
+from mcp.server.fastmcp import Context, FastMCP
+from mcp.types import ContentBlock, ToolAnnotations
+from pydantic import BaseModel, Field
+
+from .. import frames as fr
+from .. import sources as src_mod
+from . import jobs, publish, render
+from .config import reels_settings
+
+log = logging.getLogger("video_mcp.reels")
+
+INSTRUCTIONS = """
+Reels factory (create_reel etc.): you are the scriptwriter and editor, the server does voice,
+pictures, rendering and uploading.
+1. Write the script yourself: 4-7 scenes, 20-40 s in total. Scene 1 is the hook (a concrete number
+   or a surprising claim in the first 2 seconds). Each scene = one or two short spoken sentences +
+   an English image_prompt (no text in the picture) or `media` (a URL or a file from the video folder).
+2. Before calling create_reel, check facts and numbers, and remove promises of easy money, loans,
+   microloans and first-person claims that are not true.
+3. Ads: only through a saved offer (save_offer) with its erid; mark the scenes that talk about the
+   product with offer=true, they get the banner. Keep ads in at most ~30% of reels.
+4. After create_reel look at the preview frames. Publish only after the user approved it
+   (in chat, or with the Telegram review button when after="review").
+"""
+
+READ = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
+WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=True)
+PUBLISH = ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=True)
+
+
+class Scene(BaseModel):
+    text: str = Field(description="What the voice says in this scene (Russian), 1-2 short sentences")
+    image_prompt: str = Field("", description="English picture prompt; no text/letters in the picture")
+    media: str | None = Field(None, description="Instead of generating: image/video URL or a file name "
+                                                "in the server's video folder (e.g. a clip made in Veo/Kling)")
+    offer: bool = Field(False, description="Show the offer banner during this scene")
+
+
+class SceneEdit(BaseModel):
+    index: int = Field(description="0-based scene number")
+    text: str | None = None
+    image_prompt: str | None = Field(None, description="New prompt: the picture is generated again")
+    media: str | None = None
+    offer: bool | None = None
+
+
+_registered = False
+
+
+def register(mcp: FastMCP, run) -> None:
+    """Add the reels tools to `mcp`. `run` executes a blocking function in a worker thread."""
+    global _registered
+    if _registered:
+        return
+    _registered = True
+    mcp._mcp_server.instructions = (mcp._mcp_server.instructions or "") + INSTRUCTIONS
+
+    def previews(job_id: str, count: int = 4) -> list[ContentBlock]:
+        from ..server import _image
+
+        video = jobs.job_dir(job_id) / "reel.mp4"
+        duration = fr.probe_duration(video)
+        times = [duration * (i + 0.5) / count for i in range(count)]
+        return [_image(f) for f in fr.grab_frames(video, times, 360)]
+
+    def summary(job: dict) -> str:
+        lines = [f"Reel {job['id']} — {job['status']}", f"Title: {job['title']}"]
+        if job.get("duration"):
+            lines.append(f"Duration: {job['duration']:.1f} s")
+        if job.get("offer_id"):
+            lines.append(f"Offer: {job['offer_id']}")
+        for i, s in enumerate(job["scenes"]):
+            flag = " [offer]" if s.get("offer") else ""
+            lines.append(f"  {i}. {s['text']}{flag}")
+        if job.get("published"):
+            lines.append("Published: " + ", ".join(f"{k}: {v}" for k, v in job["published"].items()))
+        if job.get("publish_errors"):
+            lines.append("Publish errors: " + ", ".join(f"{k}: {v}" for k, v in job["publish_errors"].items()))
+        if job.get("error"):
+            lines.append(f"Error: {job['error']}")
+        return "\n".join(lines)
+
+    async def build(job: dict, after: str, ctx: Context | None) -> list[ContentBlock]:
+        from ..server import Reporter, _text
+
+        offer = jobs.get_offer(job.get("offer_id"))
+        workdir = jobs.job_dir(job["id"])
+        reporter = Reporter(ctx)
+        try:
+            with jobs.lock(job["id"]):
+                job["status"] = "rendering"
+                job.pop("error", None)
+                jobs.save(job)
+                started = time.monotonic()
+                video = await run(render.render, job, workdir, offer, reporter)
+                job["duration"] = round(fr.probe_duration(video), 2)
+                job["render_seconds"] = round(time.monotonic() - started, 1)
+                job["status"] = "ready"
+                jobs.save(job)
+        except Exception as exc:
+            job["status"] = "failed"
+            job["error"] = str(exc)[:500]
+            jobs.save(job)
+            raise
+        note = ""
+        if after == "review":
+            if reels_settings.review_enabled:
+                await run(publish.send_for_review, job["id"])
+                note = "\nSent to the Telegram review chat: publish with the button there."
+            else:
+                note = "\nTelegram review chat is not configured; publish with publish_reel after approval."
+        elif after == "publish":
+            result = await run(publish.publish, job["id"])
+            job = jobs.load(job["id"])
+            note = f"\nPublish result: {result}"
+        blocks: list[ContentBlock] = [_text(summary(job) + note)]
+        blocks += await run(previews, job["id"])
+        return blocks
+
+    @mcp.tool(annotations=READ, structured_output=False)
+    async def reels_setup() -> str:
+        """Show how the reels factory is configured: voice, pictures, publish targets, offers, counts."""
+        s = reels_settings
+        counts: dict[str, int] = {}
+        for j in jobs.all_jobs():
+            counts[j["status"]] = counts.get(j["status"], 0) + 1
+        offers = jobs.offers()
+        lines = [
+            f"Voice: {s.tts}" + (f" ({s.edge_voice}, rate {s.edge_rate})" if s.tts == "edge" else ""),
+            f"Pictures: {s.images}",
+            f"Publish targets: {', '.join(s.publish_targets()) or 'none configured'}",
+            f"Telegram review: {'on' if s.review_enabled else 'off'}",
+            f"Reels: {counts or 'none yet'}",
+            "Offers:" if offers else "Offers: none (add with save_offer)",
+        ]
+        lines += [f"  {k}: {v['advertiser']}, erid {v['erid']}, banner «{v.get('banner', '')}»"
+                  for k, v in offers.items()]
+        return "\n".join(lines)
+
+    @mcp.tool(annotations=WRITE, structured_output=False)
+    async def save_offer(
+        offer_id: Annotated[str, Field(description="Short id, e.g. 'card-cashback'")],
+        advertiser: Annotated[str, Field(description="Advertiser name exactly as in the marking data")],
+        erid: Annotated[str, Field(description="erid token from the CPA network / ОРД")],
+        banner: Annotated[str, Field(description="Short banner on the video, e.g. 'Карта с кэшбэком — ссылка в профиле'")],
+        link: Annotated[str, Field(description="Your partner link")] = "",
+        link_text: Annotated[str, Field(description="Label before the link in post captions")] = "Оформить",
+    ) -> str:
+        """Save an ad offer. Reels reference it by offer_id; the marking line «Реклама. <advertiser>.
+        erid: <token>» is then added to the video and to post captions automatically."""
+        if not erid.strip() or not advertiser.strip():
+            raise ValueError("advertiser and erid are required for legal ad marking")
+        jobs.save_offer(offer_id, {"advertiser": advertiser.strip(), "erid": erid.strip(),
+                                   "banner": banner.strip(), "link": link.strip(),
+                                   "link_text": link_text.strip()})
+        return f"Offer {offer_id} saved"
+
+    @mcp.tool(annotations=WRITE, structured_output=False)
+    async def create_reel(
+        title: Annotated[str, Field(description="Post title (YouTube: up to 100 chars)")],
+        scenes: Annotated[list[Scene], Field(min_length=1, max_length=12)],
+        description: Annotated[str, Field(description="Post text under the video")] = "",
+        hashtags: Annotated[list[str] | None, Field(description="Without #, e.g. ['деньги', 'лайфхаки']")] = None,
+        offer_id: Annotated[str | None, Field(description="Saved offer for ad reels (see save_offer)")] = None,
+        after: Annotated[
+            Literal["none", "review", "publish"],
+            Field(description="none = just render; review = send to the Telegram review chat; "
+                              "publish = publish right away (only if the user asked for it)"),
+        ] = "none",
+        ctx: Context | None = None,
+    ) -> list[ContentBlock]:
+        """Render a vertical reel (1080x1920): voice-over, animated pictures, subtitles and, for ad reels,
+        the legal marking and offer banner. Returns the summary and preview frames. Takes 1-3 minutes."""
+        items = [s.model_dump() for s in scenes]
+        for i, s in enumerate(items):
+            if not s["text"].strip():
+                raise ValueError(f"Scene {i} has no text")
+            if not (s["image_prompt"].strip() or s["media"]):
+                raise ValueError(f"Scene {i} needs image_prompt or media")
+        if any(s["offer"] for s in items) and not offer_id:
+            raise ValueError("Scenes are marked offer=true but no offer_id is given")
+        jobs.get_offer(offer_id)  # validate early
+        job = {
+            "id": jobs.new_id(), "created": time.strftime("%Y-%m-%d %H:%M:%S"), "status": "rendering",
+            "title": title.strip(), "description": description.strip(), "hashtags": hashtags or [],
+            "offer_id": offer_id, "scenes": items,
+        }
+        jobs.save(job)
+        return await build(job, after, ctx)
+
+    @mcp.tool(annotations=WRITE, structured_output=False)
+    async def edit_reel(
+        job_id: str,
+        changes: Annotated[list[SceneEdit] | None, Field(description="Scene changes")] = None,
+        title: str | None = None,
+        description: str | None = None,
+        after: Literal["none", "review", "publish"] = "none",
+        ctx: Context | None = None,
+    ) -> list[ContentBlock]:
+        """Change scenes (text, picture prompt, media, offer flag) or the post text and render again.
+        Unchanged pictures are reused."""
+        job = jobs.load(job_id)
+        if job["status"] in ("published", "rejected"):
+            raise ValueError(f"Reel {job_id} is {job['status']}; create a new one instead")
+        workdir = jobs.job_dir(job_id)
+        for ch in changes or []:
+            if not 0 <= ch.index < len(job["scenes"]):
+                raise ValueError(f"No scene {ch.index}")
+            scene = job["scenes"][ch.index]
+            for key in ("text", "image_prompt", "media", "offer"):
+                value = getattr(ch, key)
+                if value is not None:
+                    scene[key] = value
+            if ch.image_prompt is not None or ch.media is not None:
+                for old in workdir.glob(f"scene{ch.index:02d}.*"):
+                    old.unlink()
+        if title is not None:
+            job["title"] = title.strip()
+        if description is not None:
+            job["description"] = description.strip()
+        if any(s.get("offer") for s in job["scenes"]) and not job.get("offer_id"):
+            raise ValueError("Scenes are marked offer=true but the reel has no offer")
+        return await build(job, after, ctx)
+
+    @mcp.tool(annotations=READ, structured_output=False)
+    async def list_reels(
+        status: Annotated[str | None, Field(description="rendering, ready, published, rejected, failed")] = None,
+        limit: int = 20,
+    ) -> str:
+        """List reels, newest first."""
+        items = [j for j in jobs.all_jobs() if not status or j["status"] == status][: max(1, limit)]
+        if not items:
+            return "No reels yet"
+        return "\n".join(
+            f"{j['id']}  {j['status']:<9}  {j.get('duration', 0):>5.1f}s  {j['title']}"
+            + (f"  [{j['offer_id']}]" if j.get("offer_id") else "")
+            for j in items
+        )
+
+    @mcp.tool(annotations=READ, structured_output=False)
+    async def get_reel(
+        job_id: str,
+        frames: Annotated[int, Field(ge=0, le=8, description="Preview frames to return")] = 4,
+    ) -> list[ContentBlock]:
+        """Details of one reel with preview frames."""
+        from ..server import _text
+
+        job = jobs.load(job_id)
+        blocks: list[ContentBlock] = [_text(summary(job))]
+        if frames and (jobs.job_dir(job_id) / "reel.mp4").is_file():
+            blocks += await run(previews, job_id, frames)
+        return blocks
+
+    @mcp.tool(annotations=PUBLISH, structured_output=False)
+    async def publish_reel(
+        job_id: str,
+        targets: Annotated[list[Literal["telegram", "youtube"]] | None,
+                           Field(description="Default: all configured")] = None,
+    ) -> str:
+        """Publish a ready reel. Only after the user approved it. Repeating skips targets already done."""
+        result = await run(publish.publish, job_id, targets)
+        return f"Published: {result['published'] or 'nothing'}" + (
+            f"\nErrors: {result['errors']}" if result["errors"] else "")
+
+    @mcp.tool(annotations=PUBLISH, structured_output=False)
+    async def reject_reel(job_id: str) -> str:
+        """Mark a reel as rejected and delete its media files."""
+        with jobs.lock(job_id):
+            job = jobs.load(job_id)
+            job["status"] = "rejected"
+            jobs.save(job)
+            jobs.drop_media(job_id)
+        return f"Reel {job_id} rejected"
+
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True), structured_output=False)
+    async def scout_channel(
+        url: Annotated[str, Field(description="Channel URL (YouTube @handle, VK, TikTok…). For YouTube "
+                                              "the Shorts tab is used unless the URL points to another tab")],
+        limit: Annotated[int, Field(ge=5, le=200)] = 50,
+        top: Annotated[int, Field(ge=1, le=50, description="How many best videos to show")] = 15,
+    ) -> str:
+        """Competitor research: the channel's most viewed recent videos (title, views, link).
+        Watch the best ones with analyze_video to learn their hooks and structure."""
+        return await run(_scout, url, limit, top)
+
+
+def _scout(url: str, limit: int, top: int) -> str:
+    from yt_dlp import YoutubeDL
+
+    target = url.rstrip("/")
+    is_yt_channel = "youtube.com/@" in target or "/channel/" in target or "/c/" in target
+    if is_yt_channel and target.split("/")[-1] not in ("shorts", "videos", "streams"):
+        target += "/shorts"
+    opts = src_mod._ydl_opts(extract_flat="in_playlist", playlistend=limit, noplaylist=False)
+    try:
+        with YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(target, download=False)
+    except Exception as exc:
+        raise src_mod._friendly(exc) from exc
+    entries = [e for e in (info.get("entries") or []) if e]
+    if not entries:
+        return f"No videos found at {target}"
+    entries.sort(key=lambda e: e.get("view_count") or 0, reverse=True)
+    lines = [f"{info.get('channel') or info.get('title') or target}: {len(entries)} videos checked, top {top} by views"]
+    for e in entries[:top]:
+        views = e.get("view_count")
+        shown = f"{views:,}".replace(",", " ") if views is not None else "?"
+        link = e.get("url") or e.get("webpage_url") or e.get("id")
+        lines.append(f"{shown:>13} | {e.get('title')} | {link}")
+    return "\n".join(lines)
+
+
+def cleanup_failed(max_age_days: float = 7) -> None:
+    """Remove media of failed/rejected reels older than `max_age_days` (called on start)."""
+    cutoff = time.time() - max_age_days * 86400
+    for j in jobs.all_jobs():
+        d = jobs.job_dir(j["id"])
+        if j["status"] in ("failed", "rejected") and (d / "job.json").stat().st_mtime < cutoff:
+            shutil.rmtree(d, ignore_errors=True)

@@ -3,7 +3,7 @@ FROM python:3.12-slim
 ARG WITH_WHISPER=1
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ffmpeg ca-certificates curl \
+ && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core ca-certificates curl \
  && rm -rf /var/lib/apt/lists/*
 
 RUN useradd --create-home --uid 1000 app \
@@ -20,7 +20,7 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src
 # yt-dlp[default,deno] also installs Deno, the JS runtime yt-dlp needs for YouTube.
-RUN pip install --no-cache-dir . \
+RUN pip install --no-cache-dir ".[reels]" \
  && if [ "$WITH_WHISPER" = "1" ]; then pip install --no-cache-dir ".[whisper]"; fi \
  && chown -R app:app /opt/venv
 
