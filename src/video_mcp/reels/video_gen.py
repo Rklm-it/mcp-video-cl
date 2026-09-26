@@ -77,22 +77,25 @@ def _veo(image: Path, prompt: str, seconds: int, out: Path) -> Path:
 
 
 def _openai_videos(image: Path, prompt: str, seconds: int, out: Path) -> Path:
-    """OpenAI-style /videos API as ProxyAPI serves it: JSON only, the first frame as a data URL in
-    input_reference.image_url; the job goes pending -> completed and lists its files in unsigned_urls."""
+    """The /videos API as ProxyAPI serves it (OpenRouter's format): JSON with the scene picture as
+    frame_images[first_frame]; the job goes pending -> completed and lists its files in unsigned_urls.
+    Checked on ProxyAPI: input_reference is silently ignored (the clip ignores the picture)."""
     s = reels_settings
     if not s.video_key:
         raise ValueError("Set REELS_VIDEO_API_KEY (or REELS_GEMINI_API_KEY)")
     base, auth = s.video_base_url.rstrip("/"), {"Authorization": f"Bearer {s.video_key}"}
     width, height = (1080, 1920) if s.veo_resolution == "1080p" else (720, 1280)
     buf = io.BytesIO()
-    # The first frame must match the requested size exactly
     Image.open(image).convert("RGB").resize((width, height), Image.Resampling.LANCZOS).save(buf, "JPEG", quality=90)
+    frame = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
     resp = httpx.post(f"{base}/videos", headers=auth, timeout=120, json={
         "model": s.veo_model,
         "prompt": f"{prompt}. Smooth cinematic camera motion, natural movement, vertical 9:16. Avoid: {NEGATIVE}.",
-        "seconds": str(seconds),
-        "size": f"{width}x{height}",
-        "input_reference": {"image_url": "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()},
+        "duration": seconds,
+        "resolution": s.veo_resolution,
+        "aspect_ratio": "9:16",
+        "generate_audio": False,  # the voice-over replaces it, and silent clips are cheaper
+        "frame_images": [{"type": "image_url", "image_url": {"url": frame}, "frame_type": "first_frame"}],
     })
     if resp.status_code >= 400:
         raise RuntimeError(f"Video API error {resp.status_code}: {resp.text[:300]}")

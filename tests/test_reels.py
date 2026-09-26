@@ -439,7 +439,9 @@ def test_openai_style_videos_api(tmp_path, monkeypatch):
 
     def fake_post(url, headers, timeout, json):
         seen.update(url=url, headers=headers, data=json)
-        head, b64 = json["input_reference"]["image_url"].split(",", 1)
+        first = json["frame_images"][0]
+        assert first["frame_type"] == "first_frame" and first["type"] == "image_url"
+        head, b64 = first["image_url"]["url"].split(",", 1)
         assert head == "data:image/jpeg;base64"
         seen["frame"] = Image.open(io.BytesIO(base64.b64decode(b64))).size
         return httpx.Response(202, json={"id": "video_1", "status": "pending"})
@@ -463,8 +465,9 @@ def test_openai_style_videos_api(tmp_path, monkeypatch):
     assert out.read_bytes() == b"mp4"
     assert seen["url"] == "https://api.example.ru/v1/videos"
     assert seen["headers"] == {"Authorization": "Bearer k1"}
-    assert seen["data"]["model"] == "google/veo-3.1-lite" and seen["data"]["seconds"] == "8"
-    assert seen["data"]["size"] == "720x1280" and seen["frame"] == (720, 1280)
+    assert seen["data"]["model"] == "google/veo-3.1-lite" and seen["data"]["duration"] == 8
+    assert seen["data"]["aspect_ratio"] == "9:16" and seen["data"]["resolution"] == "720p"
+    assert seen["data"]["generate_audio"] is False and seen["frame"] == (720, 1280)
     assert seen["gets"][-1] == content
 
     polls = iter([{"id": "video_1", "status": "failed", "error": {"message": "blocked"}}])
