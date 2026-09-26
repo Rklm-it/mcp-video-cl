@@ -308,3 +308,22 @@ async def test_animate_all_renders_in_background(monkeypatch):
     assert job["status"] == "ready", job.get("error")
     assert sorted(calls) == ["one", "two"]
     assert [s["animate"] for s in job["scenes"]] == [True, True, False]
+
+
+def test_forbidden_word_stems_match_word_start_only():
+    offer = {"forbidden_words": ["работ", "зарплат"]}
+    assert jobs.forbidden_hits(offer, ["Как заработать курьером", "Доход до 3400 ₽ в день"]) == []
+    hits = jobs.forbidden_hits(offer, ["Работа курьером без опыта", "какая зарплата?"])
+    assert len(hits) == 2 and "«Работа»" in hits[0] and "«зарплата»" in hits[1]
+
+
+async def test_reel_with_banned_words_is_refused():
+    res = await call("save_offer", offer_id="eda", advertiser="Яндекс", erid="Ab12", banner="Доход до 3400 ₽ в день",
+                     forbidden_words=["работ", "подработ"])
+    assert not res.isError
+    res = await call("create_reel", title="Подработка курьером", offer_id="eda",
+                     scenes=[{"text": "Как заработать на доставке.", "image_prompt": "p", "offer": True}])
+    assert res.isError and "«Подработка»" in res.content[0].text
+    res = await call("create_reel", title="Доход на доставке", offer_id="eda", background=False,
+                     scenes=[{"text": "Как заработать на доставке.", "image_prompt": "p", "offer": True}])
+    assert not res.isError, res.content[0].text

@@ -106,3 +106,21 @@ def get_offer(offer_id: str | None) -> dict | None:
 def ad_marker(offer: dict) -> str:
     """Legal marking line required for ads in Russia: «Реклама», advertiser, erid token."""
     return f"Реклама. {offer['advertiser']}. erid: {offer['erid']}"
+
+
+def forbidden_hits(offer: dict | None, texts: list[str]) -> list[str]:
+    """Words the advertiser bans in ads (e.g. «работа», «зарплата»), found in the reel texts.
+    Each entry is a word stem matched at the start of a word, so «работ» catches «работа»
+    and «работу» but not «заработок»."""
+    if not offer:
+        return []
+    hits = []
+    for stem in offer.get("forbidden_words", []):
+        pattern = re.compile(r"(?<![\w])" + re.escape(stem.lower()), re.IGNORECASE)
+        for text in texts:
+            m = pattern.search(text or "")
+            if m:
+                end = text.find(" ", m.start())
+                hits.append(f"«{text[m.start(): end if end > 0 else len(text)].strip('.,!?:;')}» (banned: {stem})")
+                break
+    return hits

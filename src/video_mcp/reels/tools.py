@@ -62,6 +62,14 @@ class SceneEdit(BaseModel):
 _registered = False
 
 
+def _check_wording(offer: dict | None, title: str, description: str, scenes: list[dict]) -> None:
+    hits = jobs.forbidden_hits(offer, [title, description, (offer or {}).get("banner", "")]
+                               + [s.get("text", "") for s in scenes])
+    if hits:
+        raise ValueError("The offer's advertiser bans these words in ads: " + "; ".join(hits)
+                         + ". Rephrase (e.g. «доход», «заработок», «партнёр сервиса») and try again.")
+
+
 def _has_video(scenes: list[dict]) -> bool:
     return reels_settings.video != "none" and any(s.get("animate") for s in scenes)
 
@@ -148,6 +156,7 @@ def register(mcp: FastMCP, run) -> None:
             "Offers:" if offers else "Offers: none (add with save_offer)",
         ]
         lines += [f"  {k}: {v['advertiser']}, erid {v['erid']}, banner «{v.get('banner', '')}»"
+                  + (f", banned words: {', '.join(v['forbidden_words'])}" if v.get("forbidden_words") else "")
                   for k, v in offers.items()]
         return "\n".join(lines)
 
@@ -161,6 +170,10 @@ def register(mcp: FastMCP, run) -> None:
                                                "reel id and tg/yt, put them into the network's subid "
                                                "parameters to see which reel converts")] = "",
         link_text: Annotated[str, Field(description="Label before the link in post captions")] = "Оформить",
+        forbidden_words: Annotated[list[str] | None, Field(
+            description="Word stems the advertiser bans in ads, matched at word start: e.g. "
+                        "['работ', 'подработ', 'зарплат', 'заработн', 'трудоустр']. Reels with this offer "
+                        "are refused while their texts contain them")] = None,
     ) -> str:
         """Save an ad offer. Reels reference it by offer_id; the marking line «Реклама. <advertiser>.
         erid: <token>» is then added to the video and to post captions automatically."""
@@ -168,7 +181,8 @@ def register(mcp: FastMCP, run) -> None:
             raise ValueError("advertiser and erid are required for legal ad marking")
         jobs.save_offer(offer_id, {"advertiser": advertiser.strip(), "erid": erid.strip(),
                                    "banner": banner.strip(), "link": link.strip(),
-                                   "link_text": link_text.strip()})
+                                   "link_text": link_text.strip(),
+                                   "forbidden_words": [w.strip().lower() for w in forbidden_words or [] if w.strip()]})
         return f"Offer {offer_id} saved"
 
     @mcp.tool(annotations=WRITE, structured_output=False)
@@ -202,7 +216,7 @@ def register(mcp: FastMCP, run) -> None:
         if any(s["offer"] for s in items) and not offer_id:
             raise ValueError("Scenes are marked offer=true but no offer_id is given")
         _check_animated(items)
-        jobs.get_offer(offer_id)  # validate early
+        _check_wording(jobs.get_offer(offer_id), title, description, items)
         job = {
             "id": jobs.new_id(), "created": time.strftime("%Y-%m-%d %H:%M:%S"), "status": "rendering",
             "title": title.strip(), "description": description.strip(), "hashtags": hashtags or [],
@@ -246,6 +260,7 @@ def register(mcp: FastMCP, run) -> None:
         if any(s.get("offer") for s in job["scenes"]) and not job.get("offer_id"):
             raise ValueError("Scenes are marked offer=true but the reel has no offer")
         _check_animated(job["scenes"])
+        _check_wording(jobs.get_offer(job.get("offer_id")), job["title"], job.get("description", ""), job["scenes"])
         jobs.save(job)
         return await build(job, after, ctx, _has_video(job["scenes"]))
 
