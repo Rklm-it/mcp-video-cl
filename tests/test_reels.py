@@ -422,6 +422,8 @@ def test_pollinations_watermark_strip_is_cut(monkeypatch, tmp_path):
 
 
 def test_openai_style_videos_api(tmp_path, monkeypatch):
+    import base64
+
     import httpx
     from PIL import Image
 
@@ -435,16 +437,20 @@ def test_openai_style_videos_api(tmp_path, monkeypatch):
     monkeypatch.setattr(video_gen, "POLL_SECONDS", 0)
     seen = {}
 
-    def fake_post(url, headers, timeout, data, files):
-        seen.update(url=url, headers=headers, data=data)
-        seen["frame"] = Image.open(io.BytesIO(files["input_reference"][1])).size
-        return httpx.Response(200, json={"id": "video_1", "status": "queued"})
+    def fake_post(url, headers, timeout, json):
+        seen.update(url=url, headers=headers, data=json)
+        head, b64 = json["input_reference"]["image_url"].split(",", 1)
+        assert head == "data:image/jpeg;base64"
+        seen["frame"] = Image.open(io.BytesIO(base64.b64decode(b64))).size
+        return httpx.Response(202, json={"id": "video_1", "status": "pending"})
 
-    polls = iter([{"id": "video_1", "status": "in_progress"}, {"id": "video_1", "status": "completed"}])
+    content = "https://api.example.ru/v1/videos/video_1/content?index=0"
+    polls = iter([{"id": "video_1", "status": "pending"},
+                  {"id": "video_1", "status": "completed", "unsigned_urls": [content]}])
 
     def fake_get(url, headers, timeout, **kwargs):
         seen.setdefault("gets", []).append(url)
-        if url.endswith("/content"):
+        if "/content" in url:
             return httpx.Response(200, content=b"mp4")
         return httpx.Response(200, json=next(polls))
 
@@ -459,7 +465,7 @@ def test_openai_style_videos_api(tmp_path, monkeypatch):
     assert seen["headers"] == {"Authorization": "Bearer k1"}
     assert seen["data"]["model"] == "google/veo-3.1-lite" and seen["data"]["seconds"] == "8"
     assert seen["data"]["size"] == "720x1280" and seen["frame"] == (720, 1280)
-    assert seen["gets"][-1] == "https://api.example.ru/v1/videos/video_1/content"
+    assert seen["gets"][-1] == content
 
     polls = iter([{"id": "video_1", "status": "failed", "error": {"message": "blocked"}}])
     with pytest.raises(RuntimeError, match="blocked"):

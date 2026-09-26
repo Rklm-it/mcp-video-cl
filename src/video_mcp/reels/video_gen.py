@@ -77,7 +77,8 @@ def _veo(image: Path, prompt: str, seconds: int, out: Path) -> Path:
 
 
 def _openai_videos(image: Path, prompt: str, seconds: int, out: Path) -> Path:
-    """OpenAI-style /videos API: create a job with the first frame, poll it, download the mp4."""
+    """OpenAI-style /videos API as ProxyAPI serves it: JSON only, the first frame as a data URL in
+    input_reference.image_url; the job goes pending -> completed and lists its files in unsigned_urls."""
     s = reels_settings
     if not s.video_key:
         raise ValueError("Set REELS_VIDEO_API_KEY (or REELS_GEMINI_API_KEY)")
@@ -85,13 +86,14 @@ def _openai_videos(image: Path, prompt: str, seconds: int, out: Path) -> Path:
     width, height = (1080, 1920) if s.veo_resolution == "1080p" else (720, 1280)
     buf = io.BytesIO()
     # The first frame must match the requested size exactly
-    Image.open(image).convert("RGB").resize((width, height), Image.Resampling.LANCZOS).save(buf, format="PNG")
-    resp = httpx.post(f"{base}/videos", headers=auth, timeout=120, data={
+    Image.open(image).convert("RGB").resize((width, height), Image.Resampling.LANCZOS).save(buf, "JPEG", quality=90)
+    resp = httpx.post(f"{base}/videos", headers=auth, timeout=120, json={
         "model": s.veo_model,
         "prompt": f"{prompt}. Smooth cinematic camera motion, natural movement, vertical 9:16. Avoid: {NEGATIVE}.",
         "seconds": str(seconds),
         "size": f"{width}x{height}",
-    }, files={"input_reference": ("frame.png", buf.getvalue(), "image/png")})
+        "input_reference": {"image_url": "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()},
+    })
     if resp.status_code >= 400:
         raise RuntimeError(f"Video API error {resp.status_code}: {resp.text[:300]}")
     video_id = resp.json()["id"]
@@ -105,11 +107,12 @@ def _openai_videos(image: Path, prompt: str, seconds: int, out: Path) -> Path:
         if job.get("status") == "completed":
             break
         if job.get("status") in ("failed", "cancelled", "expired") or job.get("error"):
-            error = job.get("error") or {}
+            error = job.get("error") or job.get("status")
             raise RuntimeError(f"Video failed: {error.get('message', error) if isinstance(error, dict) else error}")
         if time.monotonic() > deadline:
             raise RuntimeError(f"Video did not finish in {TIMEOUT_SECONDS // 60} minutes")
-    video = net.get(f"{base}/videos/{video_id}/content", headers=auth, timeout=300, follow_redirects=True)
+    url = (job.get("unsigned_urls") or [f"{base}/videos/{video_id}/content"])[0]
+    video = net.get(url, headers=auth, timeout=300, follow_redirects=True)
     if video.status_code >= 400:
         raise RuntimeError(f"Video download failed {video.status_code}: {video.text[:300]}")
     out.write_bytes(video.content)
