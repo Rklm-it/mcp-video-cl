@@ -63,11 +63,14 @@ def test_offer_spans():
 
 
 def test_caption_puts_ad_marking_first():
-    job = {"title": "Три ошибки с кэшбэком", "description": "Проверь свою карту", "hashtags": ["деньги"]}
-    offer = {"advertiser": "Банк", "erid": "abc123", "link": "https://example.com/x", "link_text": "Оформить"}
+    job = {"id": "0926-1200-ab12", "title": "Три ошибки с кэшбэком", "description": "Проверь свою карту",
+           "hashtags": ["деньги"]}
+    offer = {"advertiser": "Банк", "erid": "abc123", "link": "https://example.com/x?sub1={platform}&sub2={reel}",
+             "link_text": "Оформить"}
     text = publish.caption(job, offer, 1024)
     assert text.startswith("Реклама. Банк. erid: abc123")
-    assert "Оформить: https://example.com/x" in text and text.endswith("#деньги")
+    assert "Оформить: https://example.com/x?sub1=tg&sub2=0926-1200-ab12" in text and text.endswith("#деньги")
+    assert "sub1=yt&" in publish.caption(job, offer, 4900, "yt")
     assert publish.caption(job, None, 1024).startswith("Три ошибки")
 
 

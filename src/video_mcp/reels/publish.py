@@ -20,7 +20,13 @@ class PublishError(Exception):
     pass
 
 
-def caption(job: dict, offer: dict | None, limit: int) -> str:
+def tracked_link(link: str, job: dict, platform: str) -> str:
+    """Fill {reel} and {platform} in a partner link, so the CPA stats (subid) show which reel
+    and which platform brought the lead."""
+    return link.replace("{reel}", job.get("id", "")).replace("{platform}", platform)
+
+
+def caption(job: dict, offer: dict | None, limit: int, platform: str = "tg") -> str:
     """Post text: ad marking first (required when the reel carries an ad), then title and text."""
     parts = []
     if offer:
@@ -29,7 +35,7 @@ def caption(job: dict, offer: dict | None, limit: int) -> str:
     if job.get("description"):
         parts.append(job["description"])
     if offer and offer.get("link"):
-        parts.append(f"{offer.get('link_text') or 'Ссылка'}: {offer['link']}")
+        parts.append(f"{offer.get('link_text') or 'Ссылка'}: {tracked_link(offer['link'], job, platform)}")
     tags = " ".join(f"#{t.lstrip('#')}" for t in job.get("hashtags", []) if t.strip("# "))
     if tags:
         parts.append(tags)
@@ -120,7 +126,7 @@ def _youtube_upload(video: Path, job: dict, offer: dict | None) -> str:
     meta = {
         "snippet": {
             "title": job["title"][:100],
-            "description": caption(job, offer, 4900) + "\n\n#shorts",
+            "description": caption(job, offer, 4900, "yt") + "\n\n#shorts",
             "tags": tags[:15],
             "categoryId": "22",
             "defaultLanguage": "ru",
@@ -155,7 +161,7 @@ def _youtube_upload(video: Path, job: dict, offer: dict | None) -> str:
 def send_for_review(job_id: str) -> None:
     job = jobs.load(job_id)
     offer = jobs.get_offer(job.get("offer_id"))
-    text = f"Черновик {job_id}\n\n" + caption(job, offer, 900)
+    text = f"Черновик {job_id}\n\n" + caption(job, offer, 900, "review")
     markup = {"inline_keyboard": [[
         {"text": "✅ Опубликовать", "callback_data": f"pub:{job_id}"},
         {"text": "🗑 Отклонить", "callback_data": f"rej:{job_id}"},

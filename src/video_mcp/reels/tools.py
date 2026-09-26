@@ -157,7 +157,9 @@ def register(mcp: FastMCP, run) -> None:
         advertiser: Annotated[str, Field(description="Advertiser name exactly as in the marking data")],
         erid: Annotated[str, Field(description="erid token from the CPA network / ОРД")],
         banner: Annotated[str, Field(description="Short banner on the video, e.g. 'Карта с кэшбэком — ссылка в профиле'")],
-        link: Annotated[str, Field(description="Your partner link")] = "",
+        link: Annotated[str, Field(description="Your partner link. {reel} and {platform} are replaced with the "
+                                               "reel id and tg/yt, put them into the network's subid "
+                                               "parameters to see which reel converts")] = "",
         link_text: Annotated[str, Field(description="Label before the link in post captions")] = "Оформить",
     ) -> str:
         """Save an ad offer. Reels reference it by offer_id; the marking line «Реклама. <advertiser>.
