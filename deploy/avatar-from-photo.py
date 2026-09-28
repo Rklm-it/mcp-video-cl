@@ -9,10 +9,12 @@ Run inside the container (photo = URL or a path under /data):
 from __future__ import annotations
 
 import base64
+import io
 import sys
 from pathlib import Path
 
 import httpx
+from PIL import Image
 
 from video_mcp.reels import gemini, net
 from video_mcp.reels.config import reels_settings as s
@@ -75,6 +77,15 @@ def load(src: str) -> tuple[bytes, str]:
     return path.read_bytes(), "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
 
 
+def shrink(photo: bytes) -> tuple[bytes, str]:
+    """Big PNGs make the API estimate a huge price and refuse; send a ~1024 px JPEG instead."""
+    image = Image.open(io.BytesIO(photo)).convert("RGB")
+    image.thumbnail((1024, 1024))
+    buf = io.BytesIO()
+    image.save(buf, format="JPEG", quality=90)
+    return buf.getvalue(), "image/jpeg"
+
+
 def restyle(photo: bytes, mime: str, style: str, base: str = KEEP) -> bytes | None:
     resp = net.post(
         gemini.url(f"models/{s.gemini_image_model}:generateContent"),
@@ -104,7 +115,7 @@ def main() -> None:
     cartoon = "--cartoon" in args
     likeness = "--comic" in args
     args = [a for a in args if a not in ("--cartoon", "--comic")]
-    photo, mime = load(args[0])
+    photo, mime = shrink(load(args[0])[0])
     extra = " ".join(args[1:])  # e.g. "Eyes are grey-blue, hair is dark blond."
     base, styles = (CARTOON, CARTOON_STYLES) if cartoon else (KEEP, STYLES)
     if likeness:
