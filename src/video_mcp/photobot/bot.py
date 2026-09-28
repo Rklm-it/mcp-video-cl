@@ -23,9 +23,13 @@ from .tg import Api
 
 log = logging.getLogger("video_mcp.photobot")
 
-NAMES = {"animate": "🎬 Оживить фото", "card": "💌 Открытка", "shoot": "📸 Фотосессия (4 фото)"}
-WAIT = {"animate": "3–5 минут", "card": "около минуты", "shoot": "1–2 минуты"}
-DOING = {"animate": "живое видео", "card": "открытку", "shoot": "фотосессию"}
+NAMES = {"animate": "🎬 Оживить фото", "card": "💌 Открытка", "shoot": "📸 Фотосессия (4 фото)",
+         "greet": "🎁 Видео-поздравление", "moroz": "🎅 Видео от Деда Мороза"}
+WAIT = {"animate": "3–5 минут", "card": "около минуты", "shoot": "1–2 минуты", "greet": "3–5 минут",
+        "moroz": "3–5 минут"}
+DOING = {"animate": "живое видео", "card": "открытку", "shoot": "фотосессию", "greet": "видео-поздравление",
+         "moroz": "видео от Деда Мороза"}
+NO_PHOTO = {"moroz"}
 POLL_SECONDS = 10
 
 TERMS = (
@@ -43,7 +47,7 @@ TERMS = (
 
 class State:
     """users: {id: {"free_card": bool, "credits": {product: n}, "photo": file_id}},
-    orders: {id: {"user", "product", "option", "photo", "status", "amount", "created"}}."""
+        orders: {id: {"user", "product", "draft" (occasion, name, voice, text…), "photo", "status", "amount", "created"}}."""
 
     def __init__(self, path: Path):
         self.path = path
@@ -91,17 +95,25 @@ class Bot:
             file_id = msg["photo"][-1]["file_id"]
         elif (msg.get("document") or {}).get("mime_type", "").startswith("image/"):
             file_id = msg["document"]["file_id"]
+        user = self.state.user(uid)
         if file_id:
             with self.state.lock:
-                self.state.user(uid)["photo"] = file_id
+                user["photo"] = file_id
+                user.pop("await", None)
+                user.pop("draft", None)
                 self.state.save()
             self.menu(chat, uid)
         elif text.startswith("/start"):
-            self.api.send(chat, self.welcome(uid))
+            with self.state.lock:
+                user.pop("await", None)
+                user.pop("draft", None)
+            self.api.send(chat, self.welcome(uid), self.moroz_button(uid))
         elif text.startswith("/terms"):
             self.api.send(chat, TERMS)
-        elif text.startswith("/stats") and str(uid) == bot_settings.admin_id:
+        elif text.startswith("/stats") and self.is_admin(uid):
             self.api.send(chat, self.stats())
+        elif user.get("await") and text:
+            self.on_answer(chat, msg["from"], user, text)
         else:
             self.api.send(chat, "Пришлите фото — лучше, где хорошо видно лицо. Дальше выберете, что сделать.")
 
@@ -111,30 +123,109 @@ class Bot:
         user = self.state.user(uid)
         if data.startswith("chk:"):
             self.check_now(chat, data[4:])
-            return
-        if not user.get("photo"):
+        elif data == "p:moroz" and self.moroz_button(uid):
+            self.api.send(chat, "Кого поздравляет Дед Мороз?", [[("👦 Мальчика", "m:boy"), ("👧 Девочку", "m:girl")]])
+        elif data in ("m:boy", "m:girl"):
+            self.ask(chat, user, "name", {"product": "moroz", "gender": data[2:]})
+        elif data in ("v:f", "v:m") and user.get("draft"):
+            self.choose_text(chat, user, data[2:])
+        elif data == "t:ready" and user.get("draft"):
+            with self.state.lock:
+                draft = user.pop("draft")
+                user.pop("await", None)
+            self.order(chat, cb["from"], draft["product"], draft)
+        elif data == "t:own" and user.get("draft"):
+            self.ask(chat, user, "text")
+        elif not user.get("photo"):
             self.api.send(chat, "Сначала пришлите фото.")
-            return
-        if data == "p:card":
-            self.api.send(chat, "Для какого повода открытка?",
-                          [[(label, f"c:{key}")] for key, (label, _, _) in products.OCCASIONS.items()])
+        elif data in ("p:card", "p:greet"):
+            prefix = data[2]  # c = card, g = greeting
+            buttons = [(label, f"{prefix}:{key}") for key, (label, _, _) in products.OCCASIONS.items()]
+            self.api.send(chat, "Какой повод?", [buttons[i:i + 2] for i in range(0, len(buttons), 2)])
         elif data.startswith("c:") and data[2:] in products.OCCASIONS:
-            self.order(chat, cb["from"], "card", data[2:])
+            self.order(chat, cb["from"], "card", {"occasion": data[2:]})
+        elif data.startswith("g:") and data[2:] in products.OCCASIONS:
+            self.ask(chat, user, "name", {"product": "greet", "occasion": data[2:]})
         elif data in ("p:animate", "p:shoot"):
-            self.order(chat, cb["from"], data[2:], "")
+            self.order(chat, cb["from"], data[2:], {})
+
+    # ---- greeting questions: name -> voice -> ready or own text ----
+
+    def ask(self, chat: int, user: dict, what: str, draft: dict | None = None) -> None:
+        with self.state.lock:
+            if draft is not None:
+                user["draft"] = draft
+            user["await"] = what
+            self.state.save()
+        if what == "name":
+            self.api.send(chat, "Как зовут того, кого поздравляем? Напишите имя, например: Маша")
+        else:
+            self.api.send(chat, f"Напишите своё поздравление одним сообщением, до {products.MAX_OWN_TEXT} "
+                                "символов. Имя в начале добавлять не нужно — оно будет на экране.")
+
+    def on_answer(self, chat: int, who: dict, user: dict, text: str) -> None:
+        draft = user.get("draft") or {}
+        if user["await"] == "name":
+            name = products.clean_name(text)
+            if not name:
+                self.api.send(chat, "Напишите имя буквами, например: Маша")
+                return
+            with self.state.lock:
+                draft["name"] = name
+                user.pop("await")
+                self.state.save()
+            if draft.get("product") == "moroz":
+                with self.state.lock:
+                    user.pop("draft", None)
+                self.order(chat, who, "moroz", draft)
+            else:
+                self.api.send(chat, "Каким голосом поздравить?", [[("👩 Женский", "v:f"), ("👨 Мужской", "v:m")]])
+        else:
+            own = products.clean_text(text)
+            if not own:
+                self.api.send(chat, "Напишите текст поздравления словами.")
+                return
+            with self.state.lock:
+                draft["text"] = own
+                user.pop("await")
+                user.pop("draft", None)
+            self.order(chat, who, draft["product"], draft)
+
+    def choose_text(self, chat: int, user: dict, gender: str) -> None:
+        with self.state.lock:
+            user["draft"]["voice"] = gender
+            self.state.save()
+        draft = user["draft"]
+        ready = products.GREETINGS[draft["occasion"]][0].format(name=draft["name"])
+        self.api.send(chat, f"Готовое поздравление:\n\n<i>{ready}</i>\n\nОставить его или написать своё?",
+                      [[("✅ Оставить", "t:ready")], [("✍️ Написать своё", "t:own")]])
+
+    def is_admin(self, uid: int | str) -> bool:
+        return bool(bot_settings.admin_id) and str(uid) == bot_settings.admin_id
+
+    def moroz_button(self, uid: int) -> list | None:
+        if bot_settings.moroz_open or self.is_admin(uid):
+            return [[(f"{NAMES['moroz']} — {bot_settings.price_moroz} ₽", "p:moroz")]]
+        return None
 
     # ---- texts ----
 
     def welcome(self, uid: int) -> str:
         free = self.state.user(uid).get("free_card")
         s = bot_settings
+        moroz = (f"{NAMES['moroz']} — именное видео: Дед Мороз сам называет имя ребёнка и хвалит его. "
+                 f"{s.price_moroz} ₽ (фото не нужно)\n") if self.moroz_button(uid) else ""
         return (
-            "Привет! Я оживляю фото и делаю из них открытки 📸✨\n\n"
+            "Привет! Я оживляю фото и делаю из них поздравления 📸✨\n\n"
             f"{NAMES['animate']} — старое или любимое фото начинает двигаться: моргает, улыбается. "
             f"{s.price_animate} ₽\n"
+            f"{NAMES['greet']} — на любой повод: день рождения, свадьба, юбилей, Новый год, 8 Марта, "
+            "23 Февраля и другие. Фото оживает, голос поздравляет по имени, можно свой текст. "
+            f"{s.price_greet} ₽\n"
             f"{NAMES['card']} — вы на праздничной открытке с поздравлением. {s.price_card} ₽"
             + (" — <b>первая бесплатно</b>" if free else "") + "\n"
-            f"{NAMES['shoot']} — студия, офис, осенний парк, вечерний город. {s.price_shoot} ₽\n\n"
+            f"{NAMES['shoot']} — студия, офис, осенний парк, вечерний город. {s.price_shoot} ₽\n"
+            + moroz + "\n"
             "Пришлите фото, где хорошо видно лицо. Оплата по СБП или картой, без подписок.\n"
             "Условия: /terms"
         )
@@ -144,6 +235,7 @@ class Bot:
         card = "бесплатно" if user.get("free_card") else f"{s.price_card} ₽"
         self.api.send(chat, "Фото получил. Что сделать?", [
             [(f"{NAMES['animate']} — {s.price_animate} ₽", "p:animate")],
+            [(f"{NAMES['greet']} — {s.price_greet} ₽", "p:greet")],
             [(f"{NAMES['card']} — {card}", "p:card")],
             [(f"{NAMES['shoot']} — {s.price_shoot} ₽", "p:shoot")],
         ])
@@ -158,13 +250,16 @@ class Bot:
 
     # ---- orders ----
 
-    def order(self, chat: int, who: dict, product: str, option: str) -> None:
+    def order(self, chat: int, who: dict, product: str, draft: dict) -> None:
         uid = who["id"]
         with self.state.lock:
             user = self.state.user(uid)
-            order = {"user": uid, "chat": chat, "product": product, "option": option, "photo": user["photo"],
+            order = {"user": uid, "chat": chat, "product": product, "draft": draft,
+                     "photo": "" if product in NO_PHOTO else user["photo"],
                      "status": "new", "amount": 0, "created": time.time()}
-            if product == "card" and user.get("free_card"):
+            if self.is_admin(uid):
+                order["credit"] = True  # the owner tries everything for free
+            elif product == "card" and user.get("free_card"):
                 user["free_card"] = False
                 order["free"] = True
             elif user["credits"].get(product, 0) > 0:
@@ -250,12 +345,19 @@ class Bot:
         self.api.send(chat, f"Принял, делаю {DOING[product]}. Это займёт {WAIT[product]}.")
         workdir = Path(tempfile.mkdtemp(prefix="photobot-"))
         try:
-            photo = self.api.download(order["photo"])
+            photo = self.api.download(order["photo"]) if order["photo"] else b""
             caption = f"Готово! Ещё: {self.link}"
+            d = order["draft"]
             if product == "card":
-                self.api.photo(chat, products.card(photo, order["option"], self.link), caption)
+                self.api.photo(chat, products.card(photo, d["occasion"], self.link), caption)
             elif product == "shoot":
                 self.api.album(chat, products.photoshoot(photo, self.link), caption)
+            elif product == "greet":
+                self.api.video(chat, products.greeting(photo, d["occasion"], d["name"], workdir, self.link,
+                                                       d.get("voice", "f"), d.get("text", "")), caption)
+            elif product == "moroz":
+                self.api.video(chat, products.moroz(d["gender"], d["name"], workdir, self.link,
+                                                    bot_settings.root / "ded-moroz.jpg"), caption)
             else:
                 self.api.video(chat, products.animate(photo, workdir, self.link), caption)
             status = "done"
@@ -270,9 +372,13 @@ class Bot:
                     user["credits"][product] = user["credits"].get(product, 0) + 1
             self.notify_admin(f"⚠️ Заказ не получился ({NAMES[product]}, user {order['user']}, "
                               f"{order['amount']} ₽): {str(exc)[:300]}")
-            self.api.send(chat, "Не получилось: нейросеть не приняла это фото. Пришлите другое фото "
-                                "(лицо крупно, без очень тёмного света) и выберите ту же услугу — "
-                                "повторю бесплатно.")
+            if product in NO_PHOTO:
+                self.api.send(chat, "Не получилось сделать видео. Нажмите /start и закажите снова — "
+                                    "повторю бесплатно.")
+            else:
+                self.api.send(chat, "Не получилось: нейросеть не приняла это фото. Пришлите другое фото "
+                                    "(лицо крупно, без очень тёмного света) и выберите ту же услугу — "
+                                    "повторю бесплатно.")
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
         with self.state.lock:
@@ -304,7 +410,7 @@ def main() -> None:
     api = Api(bot_settings.token)
     me = api.call("getMe")
     bot = Bot(api, State(bot_settings.root / "state.json"), me["username"])
-    api.call("setMyCommands", commands=[{"command": "start", "description": "Что умеет бот"},
+    api.call("setMyCommands", commands=[{"command": "start", "description": "Что умеет бот и цены"},
                                         {"command": "terms", "description": "Условия и возврат"}])
     bot.resume()
     threading.Thread(target=_poller, args=(bot, threading.Event()), daemon=True).start()

@@ -62,7 +62,7 @@ def press(data, uid=7):
 def test_first_card_is_free_then_paid_via_platega(bot, monkeypatch):
     bot.handle(photo_msg())
     menu = bot.api.sent[-1][2]
-    assert "бесплатно" in menu[1][0][0]
+    assert any("бесплатно" in text for row in menu for text, value in row if value == "p:card")
     bot.handle(press("p:card"))
     bot.handle(press("c:bday"))
     assert len(bot.api.photos) == 1
@@ -161,3 +161,79 @@ def test_signed_video_has_link(tmp_path):
                     "color=c=blue:s=720x1280:d=1", "-pix_fmt", "yuv420p", str(src)], check=True)
     out = products.sign_video(src, tmp_path / "out.mp4", "t.me/zhivoe_foto_ru_bot")
     assert out.name == "out.mp4" and out.stat().st_size > 0
+
+
+def test_video_greeting_asks_name_voice_and_text(bot, monkeypatch):
+    monkeypatch.setattr(platega, "create", lambda *a, **k: {"transactionId": "tx4", "url": "https://p", "status": "PENDING"})
+    monkeypatch.setattr(platega, "status", lambda tx: "CONFIRMED")
+    made = []
+    monkeypatch.setattr(products, "greeting", lambda photo, occasion, name, workdir, link, voice, text:
+                        made.append((occasion, name, voice, text)) or workdir / "g.mp4")
+    say = lambda text: bot.handle({"message": {"chat": {"id": 7}, "from": {"id": 7}, "text": text}})  # noqa: E731
+    bot.handle(photo_msg())
+    assert any(v == "p:greet" for row in bot.api.sent[-1][2] for _, v in row)
+    bot.handle(press("p:greet"))
+    assert len([v for row in bot.api.sent[-1][2] for _, v in row]) == len(products.OCCASIONS)
+    bot.handle(press("g:wedding"))
+    assert "имя" in bot.api.sent[-1][1]
+    say("маша!!")
+    bot.handle(press("v:m"))
+    assert "Маша, поздравляем со свадьбой" in bot.api.sent[-1][1]
+    bot.handle(press("t:own"))
+    say("Желаю счастья! https://spam.ru")
+    assert bot.state.orders["tx4"]["draft"] == {"product": "greet", "occasion": "wedding", "name": "Маша",
+                                                "voice": "m", "text": "Желаю счастья!"}
+    bot.poll_pending()
+    assert made == [("wedding", "Маша", "m", "Желаю счастья!")] and len(bot.api.videos) == 1
+
+
+def test_ded_moroz_is_for_the_owner_until_opened(bot, monkeypatch):
+    monkeypatch.setattr(bot_settings, "admin_id", "1")
+    monkeypatch.setattr(bot_settings, "moroz_open", False)
+    made = []
+    monkeypatch.setattr(products, "moroz",
+                        lambda gender, name, workdir, link, cache: made.append((gender, name)) or workdir / "m.mp4")
+    bot.handle({"message": {"chat": {"id": 7}, "from": {"id": 7}, "text": "/start"}})
+    assert bot.api.sent[-1][2] is None
+    bot.handle({"message": {"chat": {"id": 1}, "from": {"id": 1}, "text": "/start"}})
+    assert bot.api.sent[-1][2][0][0][1] == "p:moroz"
+    bot.handle(press("p:moroz", uid=1))
+    bot.handle(press("m:girl", uid=1))
+    monkeypatch.setattr(platega, "create", lambda *a, **k: pytest.fail("the owner tests for free"))
+    bot.handle({"message": {"chat": {"id": 1}, "from": {"id": 1}, "text": "Аня"}})
+    assert made == [("girl", "Аня")]
+    assert not bot.state.user(1).get("await") and not bot.state.user(1).get("draft")
+
+
+def test_greeting_video_has_voice_and_title(tmp_path, monkeypatch):
+    import json
+    import subprocess
+
+    monkeypatch.setattr(products, "edit", lambda photo, prompt, aspect="3:4": Image.new("RGB", (576, 1024), "pink"))
+
+    def fake_animate(frame, prompt, seconds, out, context=True, audio=False):
+        subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                        "color=c=blue:s=720x1280:d=2", "-pix_fmt", "yuv420p", str(out)], check=True)
+        return out
+
+    def fake_voice(text, out, gender="f"):
+        subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                        "sine=frequency=300:duration=3", "-c:a", "libmp3lame", str(out)], check=True)
+        return out
+
+    monkeypatch.setattr(products.video_gen, "animate", fake_animate)
+    monkeypatch.setattr(products, "voice", fake_voice)
+    buf = io.BytesIO()
+    Image.new("RGB", (600, 800), "red").save(buf, format="JPEG")
+    out = products.greeting(buf.getvalue(), "bday", "Маша", tmp_path, "t.me/zhivoe_foto_ru_bot")
+    info = json.loads(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type",
+                                      "-show_entries", "format=duration", "-of", "json", str(out)],
+                                     capture_output=True, text=True, check=True).stdout)
+    assert {s["codec_type"] for s in info["streams"]} == {"video", "audio"}
+    assert float(info["format"]["duration"]) >= 3.9  # the voice (3 s + 0.5 s delay) is not cut by the 2 s clip
+
+
+def test_clean_name():
+    assert products.clean_name("  маша!! ") == "Маша"
+    assert products.clean_name("Анна-Мария 123") == "Анна-Мария"
+    assert products.clean_name("123") == ""

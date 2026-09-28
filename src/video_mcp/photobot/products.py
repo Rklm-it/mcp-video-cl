@@ -24,13 +24,31 @@ KEEP_FACE = (
 
 # key: (button, title printed on the card, scene for the model)
 OCCASIONS: dict[str, tuple[str, str, str]] = {
-    "bday": ("🎂 С днём рождения", "С днём рождения!",
+    "bday": ("🎂 День рождения", "С днём рождения!",
              "a festive birthday scene: balloons, soft confetti, a cake with lit candles, warm golden bokeh light"),
+    "jubilee": ("🥂 Юбилей", "С юбилеем!",
+                "an elegant jubilee celebration: golden balloons, flowers, a festive table, warm evening light"),
+    "wedding": ("💍 Свадьба", "Совет да любовь!",
+                "a wedding celebration: white flowers, soft golden light, delicate festive decorations"),
+    "anniv": ("💞 Годовщина", "С годовщиной!",
+              "a romantic anniversary evening: candles, roses, soft warm bokeh lights"),
     "love": ("❤️ Любимому человеку", "Люблю тебя!",
              "a romantic scene: soft pink evening light, rose petals, gentle heart-shaped bokeh"),
-    "thanks": ("💐 Спасибо / маме", "Спасибо за всё!",
+    "newyear": ("🎄 Новый год", "С Новым годом!",
+                "a cozy New Year scene: decorated fir tree, warm garland lights, soft falling snow, sparklers"),
+    "mar8": ("🌷 8 Марта", "С 8 Марта!",
+             "a bright spring scene with a big bouquet of tulips and mimosa, soft sunlight"),
+    "feb23": ("🎖 23 Февраля", "С 23 Февраля!",
+              "a festive scene with dark blue and red ribbons, golden stars and warm light, dignified mood"),
+    "mother": ("👩‍👧 Маме", "Любимой маме!",
+               "a warm cozy home scene with a bouquet of fresh flowers, soft spring sunlight"),
+    "baby": ("👶 Рождение малыша", "С рождением малыша!",
+             "a gentle scene with pastel balloons, soft toys and warm light, tender mood"),
+    "grad": ("🎓 Выпускной", "С выпускным!",
+             "a graduation celebration: confetti, balloons, a festive school hall, bright joyful light"),
+    "thanks": ("💐 Спасибо", "Спасибо за всё!",
                "a warm cozy scene with a big bouquet of fresh flowers, soft spring sunlight"),
-    "congrats": ("🎉 Поздравляю", "Поздравляю!",
+    "congrats": ("🎉 Любой повод", "Поздравляю!",
                  "a celebration scene: golden confetti, sparkling lights, elegant festive decorations"),
 }
 
@@ -177,3 +195,131 @@ def sign_video(src: Path, out: Path, link: str) -> Path:
     if result.returncode != 0:
         return src  # an unsigned video is still worth delivering
     return out
+
+
+# ---- video greetings ----
+
+# key: (spoken greeting with {name}, title on screen with {name}); ready texts fit the 8-second clip
+GREETINGS: dict[str, tuple[str, str]] = {
+    "bday": ("{name}, с днём рождения! Пусть этот год принесёт много радости, здоровья и исполнения желаний!",
+             "С днём рождения, {name}!"),
+    "jubilee": ("{name}, с юбилеем! Здоровья, радости и ещё много счастливых лет рядом с близкими!",
+                "С юбилеем, {name}!"),
+    "wedding": ("{name}, поздравляем со свадьбой! Любви, нежности и долгих счастливых лет вместе!",
+                "{name}, совет да любовь!"),
+    "anniv": ("{name}, с нашей годовщиной! Спасибо за каждый день вместе. Я тебя люблю!", "{name}, с годовщиной!"),
+    "love": ("{name}, я тебя очень люблю! Спасибо, что ты у меня есть.", "{name}, люблю тебя!"),
+    "newyear": ("{name}, с Новым годом! Пусть он будет тёплым, счастливым и полным чудес!", "С Новым годом, {name}!"),
+    "mar8": ("{name}, с Восьмым марта! Весеннего настроения, любви и красоты каждый день!", "{name}, с 8 Марта!"),
+    "feb23": ("{name}, с Двадцать третьим февраля! Сил, здоровья, удачи и мирного неба!", "{name}, с 23 Февраля!"),
+    "mother": ("{name}, мамочка, спасибо тебе за всё! Ты самая лучшая, я тебя очень люблю!", "{name}, любимой маме!"),
+    "baby": ("{name}, поздравляем с рождением малыша! Здоровья, крепкого сна и много счастья!",
+             "{name}, с рождением малыша!"),
+    "grad": ("{name}, с выпускным! Впереди столько нового — пусть всё получится!", "{name}, с выпускным!"),
+    "thanks": ("{name}, спасибо тебе за всё! Ты очень дорогой для меня человек.", "Спасибо, {name}!"),
+    "congrats": ("{name}, поздравляю от всей души! Пусть всё задуманное сбывается!", "{name}, поздравляю!"),
+}
+VOICES = {"f": "ru-RU-SvetlanaNeural", "m": "ru-RU-DmitryNeural"}
+MAX_OWN_TEXT = 160  # about 10 seconds of speech: the 8-second clip plus a short hold on the last frame
+
+# Ded Moroz speaks himself (the video model makes the voice); "boy"/"girl" for the Russian word endings
+MOROZ_TEXT = {
+    "boy": "{name}, здравствуй! Это Дедушка Мороз. Я знаю, ты весь год старался. Жди подарок под ёлкой!",
+    "girl": "{name}, здравствуй! Это Дедушка Мороз. Я знаю, ты весь год старалась. Жди подарок под ёлкой!",
+}
+MOROZ_PICTURE = (
+    "Vertical 9:16 photo: kind Russian Ded Moroz (Father Frost) with a long white beard, long red fur coat with "
+    "white trim and silver embroidery, tall red hat, magic staff, sitting by a decorated New Year tree in a cozy "
+    "wooden Russian log house, warm garland lights, snow outside the window, looking straight into the camera "
+    "with a warm smile, medium close-up. Photorealistic, cinematic. No text, no letters, no watermark."
+)
+MOROZ_VIDEO = (
+    "Russian Ded Moroz (Father Frost) looks into the camera, smiles warmly and says clearly in Russian, "
+    "in a kind deep grandfatherly voice: \"{text}\" His lips move in sync with the speech, gentle hand gesture, "
+    "garland lights twinkle. Soft festive bells in the background"
+)
+
+
+def _ff(*args: str) -> None:
+    result = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", *args],
+                            capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg failed: {result.stderr[-400:]}")
+
+
+def _duration(path: Path) -> float:
+    from ..frames import probe_duration
+
+    return probe_duration(path)
+
+
+def voice(text: str, out: Path, gender: str = "f") -> Path:
+    """Free Microsoft neural voice, female or male."""
+    import asyncio
+
+    import edge_tts
+
+    async def speak() -> None:
+        await edge_tts.Communicate(text, VOICES.get(gender, VOICES["f"]), rate="+0%").save(str(out))
+
+    asyncio.run(speak())
+    return out
+
+
+def clean_text(text: str) -> str:
+    """The customer's own greeting: no links, one line of plain text, up to MAX_OWN_TEXT characters."""
+    import re
+
+    text = re.sub(r"(https?://|www\.|t\.me/|@)\S*", "", text)
+    return " ".join(text.split())[:MAX_OWN_TEXT].strip()
+
+
+def clean_name(text: str) -> str:
+    """A first name for the greeting: letters, spaces and hyphens, up to 30 characters, or ''."""
+    name = " ".join("".join(c for c in text if c.isalpha() or c in " -").split())[:30].strip(" -")
+    return name[:1].upper() + name[1:] if name else ""
+
+
+def greeting(photo: bytes, occasion: str, name: str, workdir: Path, link: str, gender: str = "f",
+             text: str = "") -> Path:
+    """The customer's photo in a festive scene comes alive, a voice congratulates `name` (a ready text for the
+    occasion or the customer's own), the title is on screen."""
+    _, _, scene = OCCASIONS[occasion]
+    spoken, shown = (s.format(name=name) for s in GREETINGS[occasion])
+    spoken = text or spoken
+    picture = edit(photo, KEEP_FACE + f"Place them in {scene}. Portrait orientation, the people large and "
+                                      "centered.", "9:16")
+    frame = vertical_frame(jpeg(picture), workdir / "frame.jpg")
+    raw = video_gen.animate(frame, ANIMATE_PROMPT, 8, workdir / "raw.mp4", context=False)
+    speech = voice(spoken, workdir / "voice.mp3", gender)
+    total = max(_duration(raw), _duration(speech) + 1.0)
+    (workdir / "title.txt").write_text(shown)
+    (workdir / "link.txt").write_text(link)
+    font = reels_settings.font
+    vf = (f"tpad=stop_mode=clone:stop_duration={total:.2f},"
+          f"drawtext=fontfile={font}:textfile={workdir / 'title.txt'}:expansion=none:fontsize=h/22:"
+          "fontcolor=white:borderw=4:bordercolor=0x802814:x=(w-tw)/2:y=h-th-h/9,"
+          f"drawtext=fontfile={font}:textfile={workdir / 'link.txt'}:expansion=none:fontsize=h/40:"
+          "fontcolor=white@0.9:box=1:boxcolor=black@0.4:boxborderw=8:x=w-tw-24:y=h-th-28")
+    out = workdir / "greeting.mp4"
+    _ff("-i", str(raw), "-i", str(speech), "-filter_complex", f"[0:v]{vf}[v];[1:a]adelay=500|500,apad[a]",
+        "-map", "[v]", "-map", "[a]", "-t", f"{total:.2f}", "-c:v", "libx264", "-preset", "veryfast",
+        "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(out))
+    return out
+
+
+def moroz_picture(cache: Path) -> Path:
+    """One Ded Moroz picture, made once and reused as the first frame of every greeting."""
+    if not cache.exists():
+        from ..reels import images
+
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        images.picture(MOROZ_PICTURE, "9:16").save(cache, format="JPEG", quality=92)
+    return cache
+
+
+def moroz(gender: str, name: str, workdir: Path, link: str, cache: Path) -> Path:
+    text = MOROZ_TEXT[gender].format(name=name)
+    raw = video_gen.animate(moroz_picture(cache), MOROZ_VIDEO.format(text=text), 8, workdir / "raw.mp4",
+                            context=False, audio=True)
+    return sign_video(raw, workdir / "ded-moroz.mp4", link)

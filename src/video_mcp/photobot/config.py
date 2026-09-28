@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..config import _env, _env_int, settings
+from ..config import _env, _env_bool, _env_int, settings
 
 
 @dataclass
@@ -20,6 +20,10 @@ class BotSettings:
     price_animate: int = field(default_factory=lambda: _env_int("PHOTO_BOT_PRICE_ANIMATE", 149))
     price_card: int = field(default_factory=lambda: _env_int("PHOTO_BOT_PRICE_CARD", 99))
     price_shoot: int = field(default_factory=lambda: _env_int("PHOTO_BOT_PRICE_SHOOT", 199))
+    price_greet: int = field(default_factory=lambda: _env_int("PHOTO_BOT_PRICE_GREET", 199))
+    price_moroz: int = field(default_factory=lambda: _env_int("PHOTO_BOT_PRICE_MOROZ", 299))
+    # Ded Moroz is shown to everyone only after the owner has checked the Russian speech (the owner always sees it)
+    moroz_open: bool = field(default_factory=lambda: _env_bool("PHOTO_BOT_DED_MOROZ", False))
     # Unpaid payment links are forgotten after this many minutes
     payment_minutes: int = field(default_factory=lambda: _env_int("PHOTO_BOT_PAYMENT_MINUTES", 30))
     workers: int = field(default_factory=lambda: _env_int("PHOTO_BOT_WORKERS", 3))
@@ -29,7 +33,8 @@ class BotSettings:
         return settings.data_dir / "photobot"
 
     def price(self, product: str) -> int:
-        return {"animate": self.price_animate, "card": self.price_card, "shoot": self.price_shoot}[product]
+        return {"animate": self.price_animate, "card": self.price_card, "shoot": self.price_shoot,
+                "greet": self.price_greet, "moroz": self.price_moroz}[product]
 
 
 bot_settings = BotSettings()
