@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 
 from .. import frames as fr
 from .. import sources as src_mod
-from . import images, jobs, publish, render
+from . import clips, images, jobs, publish, render
 from .config import reels_settings
 
 log = logging.getLogger("video_mcp.reels")
@@ -335,6 +335,38 @@ def register(mcp: FastMCP, run) -> None:
         path, jpeg = await run(_draw, prompt, aspect, send_to_review)
         return [_text(f"Saved {path}"),
                 ImageContent(type="image", data=base64.b64encode(jpeg).decode(), mimeType="image/jpeg")]
+
+    @mcp.tool(annotations=WRITE, structured_output=False)
+    async def make_clip(
+        source: Annotated[str, Field(description="Video URL (YouTube, Twitch VOD, VK…) or a local file name")],
+        start: Annotated[str | float, Field(description="Start of the fragment: seconds or \"1:02:03\"")],
+        end: Annotated[str | float, Field(description="End of the fragment (10-180 s after start)")],
+        layout: Annotated[Literal["blur", "crop"], Field(
+            description="blur: the whole wide frame in the middle on a blurred copy of itself; "
+                        "crop: the centre of the frame fills the screen (faces/gameplay in the middle)")] = "blur",
+        subtitles: Annotated[bool, Field(description="Burn big subtitles from the transcript")] = True,
+        hook: Annotated[str, Field(description="Short hook line shown on screen for the whole clip")] = "",
+        banner: Annotated[str, Field(description="Advertiser banner: URL (Google Drive file link is ok) or a "
+                                                 "local file; a video banner on green is keyed out")] = "",
+        banner_position: Literal["top", "bottom"] = "top",
+        send_to_review: Annotated[bool, Field(description="Send the clip to the Telegram review chat")] = True,
+    ) -> list[ContentBlock]:
+        """Cut a vertical 9:16 clip with the ORIGINAL sound from someone's video for clipping platforms
+        (Kliply: streamers, podcasts). Watch the source first (analyze_video / get_transcript) and pick a
+        moment that works without context: a strong reaction, a joke, a skillful play, a bold statement.
+        Returns preview frames; the file goes to the review chat for manual upload to Shorts/TikTok."""
+        from ..server import _image, _text
+        from ..timeutil import parse_time
+
+        s, e = parse_time(start), parse_time(end)
+        out = await run(clips.make_clip, source, s, e, layout=layout, subtitles=subtitles, hook=hook,
+                        banner=banner, banner_position=banner_position)
+        if send_to_review and reels_settings.review_enabled:
+            await run(publish._send_video, reels_settings.tg_review_chat, out,
+                      f"Нарезка {out.stem}: {e - s:.0f} с. Выложить в Shorts/TikTok и сдать ссылку в Kliply.")
+        duration = fr.probe_duration(out)
+        frames = await run(fr.grab_frames, out, [duration * k for k in (0.15, 0.5, 0.85)], 360)
+        return [_text(f"Clip saved: {out} ({duration:.1f} s)")] + [_image(f) for f in frames]
 
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True), structured_output=False)
     async def scout_channel(
