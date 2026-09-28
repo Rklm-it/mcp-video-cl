@@ -31,6 +31,8 @@ class BotSettings:
     price_together: int = field(default_factory=lambda: _env_int("PHOTO_BOT_PRICE_TOGETHER", 99))
     price_baby: int = field(default_factory=lambda: _env_int("PHOTO_BOT_PRICE_BABY", 99))
     price_hug: int = field(default_factory=lambda: _env_int("PHOTO_BOT_PRICE_HUG", 199))
+    price_custom: int = field(default_factory=lambda: _env_int("PHOTO_BOT_PRICE_CUSTOM", 79))
+    price_customvid: int = field(default_factory=lambda: _env_int("PHOTO_BOT_PRICE_CUSTOMVID", 199))
     # Ded Moroz video: off until the Russian speech of the video model is checked (planned for November)
     moroz_open: bool = field(default_factory=lambda: _env_bool("PHOTO_BOT_DED_MOROZ", False))
     # Unpaid payment links are forgotten after this many minutes

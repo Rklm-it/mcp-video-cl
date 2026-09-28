@@ -39,6 +39,8 @@ SERVICES: dict[str, tuple[str, str, str]] = {
     "together": ("👨‍👩‍👧 Соединить людей на одном фото", "общее фото", "около минуты"),
     "baby": ("👶 Каким будет наш ребёнок", "портрет вашего будущего ребёнка", "около минуты"),
     "hug": ("🤗 Обнять себя в детстве", "видео, где вы обнимаете себя маленького", "3–5 минут"),
+    "custom": ("✍️ Картинка по вашему описанию", "картинку по вашему описанию", "около минуты"),
+    "customvid": ("✍️ Видео по вашему описанию", "видео по вашему описанию", "3–5 минут"),
     "moroz": ("🎅 Видео от Деда Мороза", "видео от Деда Мороза", "3–5 минут"),
 }
 # What each service needs, in the order the bot asks
@@ -56,6 +58,8 @@ STEPS: dict[str, list[str]] = {
     "together": ["photo", "photo2"],
     "baby": ["photo", "photo2"],
     "hug": ["photo", "photo2"],
+    "custom": ["prompt", "photo"],
+    "customvid": ["prompt", "photo"],
     "moroz": ["gender", "name"],
 }
 # Services that take two photos never reuse an earlier photo silently: the order of the two matters
@@ -66,7 +70,19 @@ PHOTO2_ASK = {
     "hug": ("Пришлите ваше фото сейчас (лицо крупно).", "Теперь ваше детское фото — можно снять бумажный снимок "
                                                         "телефоном."),
 }
-PICTURES = {"card", "restore", "style", "drawing", "enhance", "bg", "together", "baby"}
+PICTURES = {"card", "restore", "style", "drawing", "enhance", "bg", "together", "baby", "custom"}
+OPTIONAL_PHOTO = {"custom", "customvid"}
+PROMPT_TIPS = (
+    "✍️ Опишите словами, что сделать — чем подробнее, тем лучше.\n\n"
+    "<b>С вашим фото</b>, например:\n"
+    "• «Сделай меня рыцарем в доспехах на фоне замка»\n"
+    "• «Добавь на фото снег и новогодние огоньки»\n"
+    "• «Пусть я еду на белом коне по полю» (для видео)\n\n"
+    "<b>Без фото</b>, например:\n"
+    "• «Рыжий кот в очках читает газету в кафе, акварель»\n"
+    "• «Уютный домик в зимнем лесу, вечер, горят окна»\n\n"
+    "Нельзя: обнажёнка, жестокость, реальные знаменитости и политики, чужие бренды и мультгерои."
+)
 # Menu sections: key -> (title, text, services)
 SECTIONS: dict[str, tuple[str, str, list[str]]] = {
     "memory": ("🕰 Старые фото и память",
@@ -78,6 +94,9 @@ SECTIONS: dict[str, tuple[str, str, list[str]]] = {
     "family": ("👨‍👩‍👧 Семья и дети",
                "Обнять себя в детстве, увидеть вашего будущего ребёнка, превратить детский рисунок в мультик.",
                ["hug", "baby", "drawing", "together"]),
+    "custom": ("✍️ Свой запрос",
+               "Опишите словами, что хотите, — с вашим фото или без него. Нейросеть сделает картинку или видео.",
+               ["custom", "customvid"]),
     "fix": ("🛠 Улучшить фото и фон",
             "Сделать размытое фото чётким. Поставить товар или человека на белый фон для Авито и маркетплейсов "
             "или в красивый интерьер.", ["enhance", "bg"]),
@@ -179,13 +198,21 @@ class Bot:
             return
         user = self.state.user(uid)
         if file_id:
+            draft = user.get("draft") or {}
+            product = draft.get("product", "")
             with self.state.lock:
                 user.update(photo=file_id, photo_at=time.time())
-                if user.get("await") in ("photo", "photo2"):
-                    user["draft"][user["await"]] = file_id
+                waiting = user.get("await")
+                if waiting in ("photo", "photo2"):
+                    draft[waiting] = file_id
                     user.pop("await")
+                elif draft and "photo" in STEPS[product] and "photo" not in draft and product not in TWO_PHOTOS:
+                    draft["photo"] = file_id  # sent ahead of time, e.g. while the bot waits for a name
+                    self.state.save()
+                    self.api.send(chat, "Фото получил 👍 Теперь ответьте, пожалуйста, на вопрос выше.")
+                    return
                 self.state.save()
-            if user.get("draft") and "photo" in user["draft"]:
+            if draft and waiting in ("photo", "photo2"):
                 self.next_step(chat, who)
             else:
                 self.main_menu(chat, "Фото получил 👍 Что с ним сделать?")
@@ -198,7 +225,7 @@ class Bot:
             self.api.send(chat, TERMS)
         elif text.startswith("/stats") and self.is_admin(uid):
             self.api.send(chat, self.stats())
-        elif user.get("await") in ("name", "text", "support") and text:
+        elif user.get("await") in ("name", "text", "support", "prompt") and text:
             self.on_answer(chat, who, user, text)
         elif user.get("await") in ("photo", "photo2"):
             self.api.send(chat, "Жду фото — пришлите его как картинку. Или откройте меню, чтобы выбрать другое.",
@@ -277,6 +304,8 @@ class Bot:
             self.voice_demo(chat)
         elif kind == "v" and value in products.VOICES:
             self.answer(chat, who, user, "voice", value)
+        elif data == "nophoto" and draft.get("product") in OPTIONAL_PHOTO:
+            self.answer(chat, who, user, "photo", "")
         elif data == "t:ready":
             self.answer(chat, who, user, "text", "")
         elif data == "t:own":
@@ -293,6 +322,7 @@ class Bot:
             [("🎁 Поздравления", "sec:greet")],
             [(f"🎬 Оживить фото · {s.price_animate} ₽", "p:animate")],
             *[[(title, f"sec:{key}")] for key, (title, _, _) in SECTIONS.items()],
+            [("✍️ Свой запрос: картинка или видео", "sec:custom")],
             [("📂 Мои заказы", "orders"), ("👥 Пригласить друга", "ref")],
             [("❓ Помощь", "help")],
         ]
@@ -369,7 +399,7 @@ class Bot:
         self.order(chat, who, product, draft)
 
     def ask(self, chat: int, user: dict, product: str, step: str) -> None:
-        if step in ("photo", "photo2", "name"):
+        if step in ("photo", "photo2", "name", "prompt"):
             with self.state.lock:
                 user["await"] = step
                 self.state.save()
@@ -388,6 +418,11 @@ class Bot:
             self.api.send(chat, "Какой фон нужен?", [[b] for b in buttons] + [back])
         elif step == "gender":
             self.api.send(chat, "Кого поздравляет Дед Мороз?", [[("👦 Мальчика", "m:boy"), ("👧 Девочку", "m:girl")]])
+        elif step == "prompt":
+            self.api.send(chat, PROMPT_TIPS, [back])
+        elif step == "photo" and product in OPTIONAL_PHOTO:
+            self.api.send(chat, "Пришлите фото, если запрос про него. Если фото не нужно — нажмите кнопку.",
+                          [[("🚫 Без фото", "nophoto")], back])
         elif step in ("photo", "photo2") and product in PHOTO2_ASK:
             self.api.send(chat, PHOTO2_ASK[product][step == "photo2"], [back])
         elif step == "photo":
@@ -410,6 +445,14 @@ class Bot:
             name = f"@{who['username']}" if who.get("username") else who.get("first_name", "")
             self.notify_admin(f"✉️ Вопрос от {name} (id {who['id']}):\n\n{text[:1500]}")
             self.api.send(chat, "Передал, вам ответят в личные сообщения. Спасибо!", [[(MENU_KEY, "menu")]])
+        elif what == "prompt":
+            prompt = " ".join(text.split())[:600]
+            if len(prompt) < 5:
+                self.api.send(chat, "Опишите чуть подробнее, что хотите получить.")
+            elif not products.allowed_request(prompt):
+                self.api.send(chat, "Такое бот не делает. Опишите другой запрос.")
+            else:
+                self.answer(chat, who, user, "prompt", prompt)
         elif what == "name":
             name = products.clean_name(text)
             if not name:
@@ -577,6 +620,7 @@ class Bot:
                     "bg": lambda: products.background(photo, d["scene"], self.link),
                     "together": lambda: products.together(photo, photo2, self.link),
                     "baby": lambda: products.baby(photo, photo2, self.link),
+                    "custom": lambda: products.custom_picture(photo, d["prompt"], self.link),
                 }[product]()
                 order.update(kind="photo", result=self.api.photo(chat, picture, caption, upsell))
             elif product == "shoot":
@@ -590,6 +634,7 @@ class Bot:
                     "moroz": lambda: products.moroz(d["gender"], d["name"], workdir, self.link,
                                                     cache / "ded-moroz.jpg"),
                     "hug": lambda: products.hug(photo, photo2, workdir, self.link),
+                    "customvid": lambda: products.custom_video(photo, d["prompt"], workdir, self.link),
                     "animate": lambda: products.animate(photo, workdir, self.link),
                 }[product]()
                 order.update(kind="video", result=self.api.video(chat, video, caption))

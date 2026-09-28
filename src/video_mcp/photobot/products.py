@@ -577,3 +577,40 @@ def hug(photo: bytes, photo2: bytes, workdir: Path, link: str) -> Path:
     frame = vertical_frame(jpeg(picture), workdir / "frame.jpg")
     raw = video_gen.animate(frame, HUG_VIDEO, 8, workdir / "raw.mp4", context=False)
     return sign_video(raw, workdir / "hug.mp4", link)
+
+
+# ---- the customer's own request ----
+
+SAFE = ("Keep it family-friendly: no nudity, no gore, no real celebrities or politicians, no logos, no brand or "
+        "cartoon characters owned by studios. ")
+CUSTOM_EDIT = ("Edit this photo following the customer's request below. Keep the people recognisable unless the "
+               "request says otherwise. " + SAFE + "Request: {prompt}")
+CUSTOM_NEW = "Create a beautiful, detailed picture following the customer's request below. " + SAFE + "Request: {prompt}"
+
+
+def custom_picture(photo: bytes, prompt: str, link: str) -> bytes:
+    if photo:
+        return jpeg(sign(edit(photo, CUSTOM_EDIT.format(prompt=prompt), nearest_aspect(photo)), link))
+    from ..reels import images
+
+    return jpeg(sign(images.picture(CUSTOM_NEW.format(prompt=prompt), "3:4"), link))
+
+
+def custom_video(photo: bytes, prompt: str, workdir: Path, link: str) -> Path:
+    if photo:
+        frame = vertical_frame(photo, workdir / "frame.jpg")
+    else:
+        from ..reels import images
+
+        picture = images.picture(CUSTOM_NEW.format(prompt=prompt) + " Vertical 9:16 frame.", "9:16")
+        frame = vertical_frame(jpeg(picture), workdir / "frame.jpg")
+    raw = video_gen.animate(frame, f"{SAFE}{prompt}", 8, workdir / "raw.mp4", context=False)
+    return sign_video(raw, workdir / "custom.mp4", link)
+
+
+def allowed_request(text: str) -> bool:
+    """A rough first filter; the image and video models refuse the rest themselves."""
+    import re
+
+    return not re.search(r"порн|голы[йея]|голая|обнаж|без одежд|секс|эрот|18\+|nsfw|nude|naked|кров[ьи]|"
+                         r"убий|расчлен|наркот|свастик", text.lower())

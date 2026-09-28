@@ -406,3 +406,33 @@ def test_character_picture_is_made_once(tmp_path, monkeypatch):
     for _ in range(2):
         products.character_picture("hero", "bday", tmp_path)
     assert len(calls) == 1 and "no logos" in calls[0]
+
+
+def test_own_request_with_or_without_photo(bot, monkeypatch):
+    made = []
+    monkeypatch.setattr(products, "custom_picture", lambda photo, prompt, link: made.append((bool(photo), prompt)) or b"i")
+    pay_with(monkeypatch, "tx13")
+    say(bot, "/start")
+    bot.handle(press("sec:custom"))
+    assert {"p:custom", "p:customvid"} <= set(buttons(bot))
+    bot.handle(press("p:custom"))
+    say(bot, "голая девушка на пляже")
+    assert "не делает" in bot.api.sent[-1][1]
+    say(bot, "Рыжий кот в очках читает газету, акварель")
+    assert "nophoto" in buttons(bot)
+    bot.handle(press("nophoto"))
+    bot.poll_pending()
+    assert made == [(False, "Рыжий кот в очках читает газету, акварель")]
+
+    pay_with(monkeypatch, "tx14")
+    bot.handle(press("p:custom"))
+    bot.handle({"message": {"chat": {"id": 7}, "from": {"id": 7}, "photo": [{"file_id": "me"}]}})  # photo first
+    assert "вопрос выше" in bot.api.sent[-1][1]
+    say(bot, "Сделай меня рыцарем")
+    bot.poll_pending()
+    assert made[-1] == (True, "Сделай меня рыцарем") and bot.state.orders["tx14"]["photo"] == "me"
+
+
+def test_request_filter():
+    assert products.allowed_request("Сделай меня рыцарем")
+    assert not products.allowed_request("NSFW картинка")
