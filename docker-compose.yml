@@ -14,6 +14,22 @@ services:
     ports:
       - "127.0.0.1:${VIDEO_MCP_HOST_PORT:-8765}:8000"
 
+  # Telegram bot «Оживи фото» (src/video_mcp/photobot): same image, own process.
+  # Enabled with COMPOSE_PROFILES=photobot in .env (needs PHOTO_BOT_TOKEN, PLATEGA_MERCHANT_ID, PLATEGA_SECRET).
+  photo-bot:
+    build:
+      context: .
+      args:
+        WITH_WHISPER: ${WITH_WHISPER:-1}
+    restart: unless-stopped
+    profiles: ["photobot"]
+    env_file: .env
+    volumes:
+      - ./data:/data
+    entrypoint: ["setpriv", "--reuid=app", "--regid=app", "--init-groups", "video-mcp-photobot"]
+    healthcheck:
+      disable: true
+
   # Bundled HTTPS proxy, used when ports 80/443 are free:
   #   docker compose --profile builtin-proxy up -d
   caddy:

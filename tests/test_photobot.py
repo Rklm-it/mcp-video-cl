@@ -1,0 +1,163 @@
+import io
+
+import pytest
+from PIL import Image
+
+from video_mcp.photobot import bot as botmod
+from video_mcp.photobot import platega, products
+from video_mcp.photobot.config import bot_settings
+
+
+class FakeApi:
+    def __init__(self):
+        self.sent, self.photos, self.albums, self.videos = [], [], [], []
+
+    def send(self, chat, text, rows=None):
+        self.sent.append((chat, text, rows))
+        return {}
+
+    def answer(self, *a, **k):
+        pass
+
+    def photo(self, chat, image, caption=""):
+        self.photos.append(image)
+
+    def album(self, chat, images, caption=""):
+        self.albums.append(images)
+
+    def video(self, chat, path, caption=""):
+        self.videos.append(path)
+
+    def download(self, file_id):
+        buf = io.BytesIO()
+        Image.new("RGB", (800, 600), "skyblue").save(buf, format="JPEG")
+        return buf.getvalue()
+
+
+class Now:
+    """Runs submitted jobs right away, so the test sees the result."""
+
+    def submit(self, fn, *args):
+        fn(*args)
+
+
+@pytest.fixture
+def bot(tmp_path, monkeypatch):
+    monkeypatch.setattr(bot_settings, "admin_id", "")
+    monkeypatch.setattr(products, "edit", lambda photo, prompt, aspect="3:4": Image.new("RGB", (768, 1024), "pink"))
+    b = botmod.Bot(FakeApi(), botmod.State(tmp_path / "state.json"), "zhivoe_foto_ru_bot")
+    b.pool = Now()
+    return b
+
+
+def photo_msg(uid=7):
+    return {"message": {"chat": {"id": uid}, "from": {"id": uid}, "photo": [{"file_id": "small"}, {"file_id": "big"}]}}
+
+
+def press(data, uid=7):
+    return {"callback_query": {"id": "cb", "from": {"id": uid, "username": "ivan"},
+                               "message": {"chat": {"id": uid}}, "data": data}}
+
+
+def test_first_card_is_free_then_paid_via_platega(bot, monkeypatch):
+    bot.handle(photo_msg())
+    menu = bot.api.sent[-1][2]
+    assert "бесплатно" in menu[1][0][0]
+    bot.handle(press("p:card"))
+    bot.handle(press("c:bday"))
+    assert len(bot.api.photos) == 1
+    card = Image.open(io.BytesIO(bot.api.photos[0]))
+    assert card.size == (768, 1024)
+    assert not bot.state.user(7)["free_card"]
+
+    created = []
+    monkeypatch.setattr(platega, "create", lambda amount, *a, **k: created.append(amount) or
+                        {"transactionId": "tx1", "url": "https://pay.platega.io/?id=1", "status": "PENDING"})
+    bot.handle(press("c:love"))
+    assert created == [bot_settings.price_card]
+    rows = bot.api.sent[-1][2]
+    assert rows[0][0][1].startswith("https://pay.platega.io") and rows[1][0][1] == "chk:tx1"
+    assert len(bot.api.photos) == 1  # nothing made before the payment
+
+    monkeypatch.setattr(platega, "status", lambda tx: "PENDING")
+    bot.poll_pending()
+    assert bot.state.orders["tx1"]["status"] == "pending"
+    monkeypatch.setattr(platega, "status", lambda tx: "CONFIRMED")
+    bot.handle(press("chk:tx1"))
+    assert bot.state.orders["tx1"]["status"] == "done"
+    assert len(bot.api.photos) == 2
+    bot.poll_pending()  # a paid order is never made twice
+    assert len(bot.api.photos) == 2
+
+
+def test_failed_job_gives_a_free_retry(bot, monkeypatch):
+    monkeypatch.setattr(platega, "create", lambda *a, **k: {"transactionId": "tx2", "url": "https://p", "status": "PENDING"})
+    monkeypatch.setattr(platega, "status", lambda tx: "CONFIRMED")
+
+    def broken(*a):
+        raise RuntimeError("blocked")
+
+    monkeypatch.setattr(products, "photoshoot", broken)
+    bot.handle(photo_msg())
+    bot.handle(press("p:shoot"))
+    bot.poll_pending()
+    assert bot.state.orders["tx2"]["status"] == "failed"
+    assert bot.state.user(7)["credits"]["shoot"] == 1
+
+    monkeypatch.setattr(products, "photoshoot", lambda photo, link: [b"1", b"2", b"3", b"4"])
+    monkeypatch.setattr(platega, "create", lambda *a, **k: pytest.fail("the retry is free"))
+    bot.handle(press("p:shoot"))
+    assert bot.api.albums == [[b"1", b"2", b"3", b"4"]]
+    assert bot.state.user(7)["credits"]["shoot"] == 0
+
+
+def test_canceled_payment_makes_nothing(bot, monkeypatch):
+    monkeypatch.setattr(platega, "create", lambda *a, **k: {"transactionId": "tx3", "url": "https://p", "status": "PENDING"})
+    monkeypatch.setattr(platega, "status", lambda tx: "CANCELED")
+    bot.handle(photo_msg())
+    bot.handle(press("p:animate"))
+    bot.poll_pending()
+    assert bot.state.orders["tx3"]["status"] == "canceled"
+    assert not bot.api.videos
+
+
+def test_platega_request_shape(monkeypatch):
+    seen = {}
+
+    class Resp:
+        status_code = 200
+
+        def json(self):
+            return {"transactionId": "t", "url": "https://pay", "status": "PENDING"}
+
+    def post(url, headers, json, timeout):
+        seen.update(url=url, headers=headers, body=json)
+        return Resp()
+
+    monkeypatch.setattr(bot_settings, "platega_merchant", "m")
+    monkeypatch.setattr(bot_settings, "platega_secret", "s")
+    monkeypatch.setattr(platega.net, "post", post)
+    platega.create(149, "Оживить фото", 7, "ivan", "animate", "https://t.me/x")
+    assert seen["url"] == "https://app.platega.io/v2/transaction/process"
+    assert seen["headers"] == {"X-MerchantId": "m", "X-Secret": "s"}
+    assert seen["body"]["paymentDetails"] == {"amount": 149, "currency": "RUB"}
+    assert seen["body"]["metadata"] == {"userId": "7", "userName": "@ivan"}
+
+
+def test_vertical_frame_keeps_whole_photo(tmp_path):
+    buf = io.BytesIO()
+    Image.new("RGB", (1200, 800), "red").save(buf, format="JPEG")
+    out = products.vertical_frame(buf.getvalue(), tmp_path / "f.jpg")
+    frame = Image.open(out)
+    assert frame.size == (720, 1280)
+    assert frame.getpixel((360, 640))[0] > 200  # the photo sits in the middle
+
+
+def test_signed_video_has_link(tmp_path):
+    import subprocess
+
+    src = tmp_path / "in.mp4"
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                    "color=c=blue:s=720x1280:d=1", "-pix_fmt", "yuv420p", str(src)], check=True)
+    out = products.sign_video(src, tmp_path / "out.mp4", "t.me/zhivoe_foto_ru_bot")
+    assert out.name == "out.mp4" and out.stat().st_size > 0

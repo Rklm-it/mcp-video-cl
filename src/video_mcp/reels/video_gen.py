@@ -22,8 +22,8 @@ TIMEOUT_SECONDS = 600
 NEGATIVE = "text, letters, captions, subtitles, watermark, logo, distorted faces, extra fingers"
 
 
-def _with_context(prompt: str) -> str:
-    return f"{prompt}. {reels_settings.scene_context}" if reels_settings.scene_context else prompt
+def _with_context(prompt: str, context: bool = True) -> str:
+    return f"{prompt}. {reels_settings.scene_context}" if context and reels_settings.scene_context else prompt
 
 
 def clip_seconds(scene_seconds: float) -> int:
@@ -31,16 +31,17 @@ def clip_seconds(scene_seconds: float) -> int:
     return next((d for d in VEO_DURATIONS if d >= scene_seconds), VEO_DURATIONS[-1])
 
 
-def animate(image: Path, prompt: str, seconds: float, out: Path) -> Path:
+def animate(image: Path, prompt: str, seconds: float, out: Path, context: bool = True) -> Path:
+    """`context=False` skips the scene setting (a customer's own photo already has its place)."""
     provider = reels_settings.video
     if provider == "veo":
-        return _veo(image, prompt, clip_seconds(seconds), out)
+        return _veo(image, prompt, clip_seconds(seconds), out, context)
     if provider == "openai":
-        return _openai_videos(image, prompt, clip_seconds(seconds), out)
+        return _openai_videos(image, prompt, clip_seconds(seconds), out, context)
     raise ValueError(f"Video generation is off (REELS_VIDEO={provider!r}); set REELS_VIDEO=veo or openai")
 
 
-def _veo(image: Path, prompt: str, seconds: int, out: Path) -> Path:
+def _veo(image: Path, prompt: str, seconds: int, out: Path, context: bool = True) -> Path:
     s = reels_settings
     frame = Image.open(image).convert("RGB")
     frame.thumbnail((720, 1280))
@@ -48,7 +49,7 @@ def _veo(image: Path, prompt: str, seconds: int, out: Path) -> Path:
     frame.save(buf, format="PNG")
     body = {
         "instances": [{
-            "prompt": f"{_with_context(prompt)}. Smooth cinematic camera motion, natural movement, vertical 9:16.",
+            "prompt": f"{_with_context(prompt, context)}. Smooth cinematic camera motion, natural movement, vertical 9:16.",
             "image": {"bytesBase64Encoded": base64.b64encode(buf.getvalue()).decode(), "mimeType": "image/png"},
         }],
         "parameters": {"aspectRatio": "9:16", "durationSeconds": seconds, "resolution": s.veo_resolution,
@@ -80,7 +81,7 @@ def _veo(image: Path, prompt: str, seconds: int, out: Path) -> Path:
     return gemini.download(samples[0]["video"]["uri"], out)
 
 
-def _openai_videos(image: Path, prompt: str, seconds: int, out: Path) -> Path:
+def _openai_videos(image: Path, prompt: str, seconds: int, out: Path, context: bool = True) -> Path:
     """The /videos API as ProxyAPI serves it (OpenRouter's format): JSON with the scene picture as
     frame_images[first_frame]; the job goes pending -> completed and lists its files in unsigned_urls.
     Checked on ProxyAPI: input_reference is silently ignored (the clip ignores the picture)."""
@@ -94,7 +95,7 @@ def _openai_videos(image: Path, prompt: str, seconds: int, out: Path) -> Path:
     frame = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
     resp = httpx.post(f"{base}/videos", headers=auth, timeout=120, json={
         "model": s.veo_model,
-        "prompt": f"{_with_context(prompt)}. Smooth cinematic camera motion, natural movement, vertical 9:16. Avoid: {NEGATIVE}.",
+        "prompt": f"{_with_context(prompt, context)}. Smooth cinematic camera motion, natural movement, vertical 9:16. Avoid: {NEGATIVE}.",
         "duration": seconds,
         "resolution": s.veo_resolution,
         "aspect_ratio": "9:16",
