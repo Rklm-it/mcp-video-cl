@@ -2,7 +2,8 @@
 Results go to /data/avatar-<n>.png and, as files, to the Telegram review chat.
 
 Run inside the container (photo = URL or a path under /data):
-    docker compose exec -T video-mcp python - <photo-url-or-path> < deploy/avatar-from-photo.py
+    docker compose exec -T video-mcp python - <photo-url-or-path> ["Eyes are grey, hair is dark blond."] \
+        < deploy/avatar-from-photo.py
 """
 
 from __future__ import annotations
@@ -21,6 +22,8 @@ KEEP = (
     "mouth, skin, facial hair, hairline and expression — do not beautify, slim, age or change it in any way. "
     "Only change what is listed below. Crop to a square head-and-shoulders avatar, face centered and large, "
     "so it reads well as a small circle. No text, no letters, no watermark. "
+    "If the photo is black-and-white or has filters (glitch stripes, colour fringing, heavy grain), "
+    "remove the filters and noise and restore natural realistic colour with a natural skin tone. "
 )
 
 STYLES = [
@@ -68,8 +71,9 @@ def restyle(photo: bytes, mime: str, style: str) -> bytes | None:
 
 def main() -> None:
     photo, mime = load(sys.argv[1])
+    extra = " ".join(sys.argv[2:])  # e.g. "Eyes are grey-blue, hair is dark blond."
     for n, style in enumerate(STYLES, 1):
-        img = restyle(photo, mime, style)
+        img = restyle(photo, mime, f"{style} {extra}".strip())
         if not img:
             print(f"#{n}: no image")
             continue
