@@ -18,21 +18,22 @@ from video_mcp.reels.config import reels_settings as s
 
 STYLE = (
     "Square avatar for a Telegram channel about personal finance, must read well as a small circle: "
-    "one character, head and shoulders, centered, big and close, plain solid background. "
-    "Modern flat 2D vector illustration, bold clean shapes, smooth gradients, friendly and trustworthy, "
-    "premium quality like a top app mascot. No text, no letters, no digits, no watermark."
+    "one person, head and shoulders, centered, close-up, clean simple background. "
+    "High-end realistic portrait like a professional studio photo or a premium editorial illustration: "
+    "natural proportions, realistic skin, soft natural light, shallow depth of field. "
+    "Not a cartoon, not anime, not 3D-toy style, no exaggerated features. "
+    "No text, no letters, no digits, no watermark."
 )
 
 PROMPTS = [
-    "A friendly Russian man around 35 with short dark hair and a neat short beard, warm smile, "
-    "holding a big orange calculator next to his face, one eyebrow raised as if checking the math, "
-    "navy blue shirt, bright warm orange background.",
-    "A cheerful Russian man around 35 with short hair and stubble, wearing round glasses, winking, "
-    "holding a golden coin with the ruble sign between two fingers, casual dark hoodie, "
-    "deep teal background.",
-    "A confident Russian man around 35 with short hair and a light beard, thoughtful smile, "
-    "a pencil behind his ear, holding a small notebook with a rising line chart drawn in it, "
-    "denim shirt, soft yellow background.",
+    "A Russian man around 35 with short dark hair and a neat short beard, calm confident friendly smile, "
+    "dark navy sweater, holding a simple calculator slightly raised near his chest, "
+    "warm soft studio light, muted warm orange-beige background.",
+    "A Russian man around 35 with short hair and light stubble, thin round glasses, slight smile, "
+    "looking straight at the camera, casual light-blue shirt, holding a small notebook with handwritten "
+    "calculations, soft muted teal background.",
+    "A Russian man around 35 with short hair and a light beard, arms crossed, smart and trustworthy look, "
+    "grey hoodie, soft rim light, clean light-grey background.",
 ]
 
 
