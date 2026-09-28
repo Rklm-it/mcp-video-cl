@@ -195,14 +195,16 @@ def test_video_greeting_asks_name_voice_and_text(bot, monkeypatch):
     assert made == [("wedding", "Маша", "m", "Желаю счастья!")] and len(bot.api.videos) == 1
 
 
-def test_ded_moroz_is_for_the_owner_until_opened(bot, monkeypatch):
+def test_ded_moroz_is_hidden_until_opened(bot, monkeypatch):
     monkeypatch.setattr(bot_settings, "admin_id", "1")
     monkeypatch.setattr(bot_settings, "moroz_open", False)
+    for uid in (7, 1):
+        bot.handle({"message": {"chat": {"id": uid}, "from": {"id": uid}, "text": "/start"}})
+        assert bot.api.sent[-1][2] is None and "Деда Мороза" not in bot.api.sent[-1][1]
+    monkeypatch.setattr(bot_settings, "moroz_open", True)
     made = []
     monkeypatch.setattr(products, "moroz",
                         lambda gender, name, workdir, link, cache: made.append((gender, name)) or workdir / "m.mp4")
-    bot.handle({"message": {"chat": {"id": 7}, "from": {"id": 7}, "text": "/start"}})
-    assert bot.api.sent[-1][2] is None
     bot.handle({"message": {"chat": {"id": 1}, "from": {"id": 1}, "text": "/start"}})
     assert bot.api.sent[-1][2][0][0][1] == "p:moroz"
     bot.handle(press("p:moroz", uid=1))

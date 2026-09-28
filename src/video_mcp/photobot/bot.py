@@ -220,7 +220,7 @@ class Bot:
         return bool(bot_settings.admin_id) and str(uid) == bot_settings.admin_id
 
     def moroz_button(self, uid: int) -> list | None:
-        if bot_settings.moroz_open or self.is_admin(uid):
+        if bot_settings.moroz_open:
             return [[(f"{NAMES['moroz']} — {bot_settings.price_moroz} ₽", "p:moroz")]]
         return None
 

@@ -22,7 +22,7 @@ class BotSettings:
     price_shoot: int = field(default_factory=lambda: _env_int("PHOTO_BOT_PRICE_SHOOT", 199))
     price_greet: int = field(default_factory=lambda: _env_int("PHOTO_BOT_PRICE_GREET", 199))
     price_moroz: int = field(default_factory=lambda: _env_int("PHOTO_BOT_PRICE_MOROZ", 299))
-    # Ded Moroz is shown to everyone only after the owner has checked the Russian speech (the owner always sees it)
+    # Ded Moroz video: off until the Russian speech of the video model is checked (planned for November)
     moroz_open: bool = field(default_factory=lambda: _env_bool("PHOTO_BOT_DED_MOROZ", False))
     # Unpaid payment links are forgotten after this many minutes
     payment_minutes: int = field(default_factory=lambda: _env_int("PHOTO_BOT_PAYMENT_MINUTES", 30))
