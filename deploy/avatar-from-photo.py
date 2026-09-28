@@ -55,17 +55,25 @@ CARTOON_STYLES = [
     "calm smart look, holding a golden coin with the ruble sign, soft yellow background.",
 ]
 
-# Comic style with maximum likeness: no caricature, the drawing traces the real face.
+# Stylised portrait with maximum likeness: flattering like a good photographer, never a different person.
 LIKENESS = (
-    "Draw a portrait of the man from this photo in a hand-drawn comic / graphic-novel style. "
-    "Likeness is the top priority: trace his real facial proportions exactly — face width and shape, "
-    "distance between the eyes, eye shape, eyebrows, nose width and length, lip shape, jaw, ears, hairline "
-    "and haircut. No caricature, no exaggeration, no idealisation, do not make him younger, slimmer or "
-    "more handsome — only simplify the rendering into confident ink lines and flat colours. "
-    "Square avatar, head and shoulders, centered, large, reads well as a small circle. "
-    "Soft yellow background, holding a golden coin with the ruble sign near the chest. "
-    "No text, no letters, no digits, no watermark. "
+    "Draw a portrait of the man from this photo. Likeness is the top priority: keep his real facial "
+    "proportions — face shape and width, eye shape and distance, eyebrows, nose, lips, jaw, ears, hairline "
+    "and haircut — so friends instantly recognise him. Make it attractive the way a good photographer would: "
+    "friendly relaxed half-smile, open confident look, clean even skin, neatly groomed hair and stubble, "
+    "flattering soft light. Do not change his features, age or build. "
+    "Square avatar for a Telegram channel about personal finance: head and shoulders, centered, large, "
+    "reads well as a small circle, clean simple background. No text, no letters, no digits, no watermark. "
 )
+
+LIKENESS_STYLES = [
+    "Style: premium clean vector portrait like a top brand mascot — smooth shapes, soft gradient shading, "
+    "thin neat outlines, dark navy hoodie, warm orange-to-peach gradient background.",
+    "Style: warm semi-realistic digital painting like a magazine columnist portrait — soft brushwork, "
+    "natural colours, light-blue shirt, soft teal background.",
+    "Style: modern 3D animated film character, likeness first, soft studio lighting, grey hoodie, "
+    "holding a golden coin with the ruble sign near the chest, soft yellow background.",
+]
 
 
 def load(src: str) -> tuple[bytes, str]:
@@ -119,7 +127,7 @@ def main() -> None:
     extra = " ".join(args[1:])  # e.g. "Eyes are grey-blue, hair is dark blond."
     base, styles = (CARTOON, CARTOON_STYLES) if cartoon else (KEEP, STYLES)
     if likeness:
-        base, styles = LIKENESS, ["Attempt 1.", "Attempt 2, a slightly different pose.", "Attempt 3."]
+        base, styles = LIKENESS, LIKENESS_STYLES
     for n, style in enumerate(styles, 1):
         img = restyle(photo, mime, f"{style} {extra}".strip(), base)
         if not img:
