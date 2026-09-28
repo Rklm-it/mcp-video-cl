@@ -2,7 +2,7 @@
 Results go to /data/avatar-<n>.png and, as files, to the Telegram review chat.
 
 Run inside the container (photo = URL or a path under /data):
-    docker compose exec -T video-mcp python - <photo-url-or-path> ["Eyes are grey, hair is dark blond."] \
+    docker compose exec -T video-mcp python - <photo-url-or-path> [--cartoon] ["Eyes are grey, hair is dark blond."] \
         < deploy/avatar-from-photo.py
 """
 
@@ -36,6 +36,24 @@ STYLES = [
 ]
 
 
+CARTOON = (
+    "Turn the man from this photo into a stylized cartoon avatar that is still clearly him: keep his face "
+    "shape, eye shape, nose, lips, eyebrows, ears, hairstyle and hair colour recognisable, like a skilled "
+    "caricature artist would — slightly exaggerated but never a different person. Remove any photo filters. "
+    "Square avatar for a Telegram channel about personal finance, head and shoulders, centered, large, "
+    "reads well as a small circle. No text, no letters, no digits, no watermark. "
+)
+
+CARTOON_STYLES = [
+    "Style: modern 3D animated movie character, soft lighting, friendly confident smile, "
+    "dark navy hoodie, holding a small orange calculator, warm orange background.",
+    "Style: clean flat 2D vector illustration with bold shapes and soft gradients, slight smile, "
+    "grey hoodie, solid teal background.",
+    "Style: hand-drawn comic / graphic-novel portrait with confident ink lines and flat colours, "
+    "calm smart look, holding a golden coin with the ruble sign, soft yellow background.",
+]
+
+
 def load(src: str) -> tuple[bytes, str]:
     if src.startswith("http"):
         resp = httpx.get(src, timeout=60, follow_redirects=True)
@@ -45,14 +63,14 @@ def load(src: str) -> tuple[bytes, str]:
     return path.read_bytes(), "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
 
 
-def restyle(photo: bytes, mime: str, style: str) -> bytes | None:
+def restyle(photo: bytes, mime: str, style: str, base: str = KEEP) -> bytes | None:
     resp = net.post(
         gemini.url(f"models/{s.gemini_image_model}:generateContent"),
         headers=gemini.headers(),
         json={
             "contents": [{"parts": [
                 {"inline_data": {"mime_type": mime, "data": base64.b64encode(photo).decode()}},
-                {"text": KEEP + style},
+                {"text": base + style},
             ]}],
             "generationConfig": {"responseModalities": ["IMAGE"], "imageConfig": {"aspectRatio": "1:1"}},
         },
@@ -70,14 +88,18 @@ def restyle(photo: bytes, mime: str, style: str) -> bytes | None:
 
 
 def main() -> None:
-    photo, mime = load(sys.argv[1])
-    extra = " ".join(sys.argv[2:])  # e.g. "Eyes are grey-blue, hair is dark blond."
-    for n, style in enumerate(STYLES, 1):
-        img = restyle(photo, mime, f"{style} {extra}".strip())
+    args = sys.argv[1:]
+    cartoon = "--cartoon" in args
+    args = [a for a in args if a != "--cartoon"]
+    photo, mime = load(args[0])
+    extra = " ".join(args[1:])  # e.g. "Eyes are grey-blue, hair is dark blond."
+    base, styles = (CARTOON, CARTOON_STYLES) if cartoon else (KEEP, STYLES)
+    for n, style in enumerate(styles, 1):
+        img = restyle(photo, mime, f"{style} {extra}".strip(), base)
         if not img:
             print(f"#{n}: no image")
             continue
-        out = Path(f"/data/avatar-{n}.png")
+        out = Path(f"/data/avatar-{'cartoon-' if cartoon else ''}{n}.png")
         out.write_bytes(img)
         print(f"#{n}: saved {out}")
         if s.tg_token and s.tg_review_chat:
