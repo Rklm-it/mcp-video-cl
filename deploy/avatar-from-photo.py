@@ -2,7 +2,7 @@
 Results go to /data/avatar-<n>.png and, as files, to the Telegram review chat.
 
 Run inside the container (photo = URL or a path under /data):
-    docker compose exec -T video-mcp python - <photo-url-or-path> [--cartoon] ["Eyes are grey, hair is dark blond."] \
+    docker compose exec -T video-mcp python - <photo-url-or-path> [--cartoon | --comic] ["Eyes are grey, hair is dark blond."] \
         < deploy/avatar-from-photo.py
 """
 
@@ -53,6 +53,18 @@ CARTOON_STYLES = [
     "calm smart look, holding a golden coin with the ruble sign, soft yellow background.",
 ]
 
+# Comic style with maximum likeness: no caricature, the drawing traces the real face.
+LIKENESS = (
+    "Draw a portrait of the man from this photo in a hand-drawn comic / graphic-novel style. "
+    "Likeness is the top priority: trace his real facial proportions exactly — face width and shape, "
+    "distance between the eyes, eye shape, eyebrows, nose width and length, lip shape, jaw, ears, hairline "
+    "and haircut. No caricature, no exaggeration, no idealisation, do not make him younger, slimmer or "
+    "more handsome — only simplify the rendering into confident ink lines and flat colours. "
+    "Square avatar, head and shoulders, centered, large, reads well as a small circle. "
+    "Soft yellow background, holding a golden coin with the ruble sign near the chest. "
+    "No text, no letters, no digits, no watermark. "
+)
+
 
 def load(src: str) -> tuple[bytes, str]:
     if src.startswith("http"):
@@ -90,16 +102,20 @@ def restyle(photo: bytes, mime: str, style: str, base: str = KEEP) -> bytes | No
 def main() -> None:
     args = sys.argv[1:]
     cartoon = "--cartoon" in args
-    args = [a for a in args if a != "--cartoon"]
+    likeness = "--comic" in args
+    args = [a for a in args if a not in ("--cartoon", "--comic")]
     photo, mime = load(args[0])
     extra = " ".join(args[1:])  # e.g. "Eyes are grey-blue, hair is dark blond."
     base, styles = (CARTOON, CARTOON_STYLES) if cartoon else (KEEP, STYLES)
+    if likeness:
+        base, styles = LIKENESS, ["Attempt 1.", "Attempt 2, a slightly different pose.", "Attempt 3."]
     for n, style in enumerate(styles, 1):
         img = restyle(photo, mime, f"{style} {extra}".strip(), base)
         if not img:
             print(f"#{n}: no image")
             continue
-        out = Path(f"/data/avatar-{'cartoon-' if cartoon else ''}{n}.png")
+        kind = "comic-" if likeness else "cartoon-" if cartoon else ""
+        out = Path(f"/data/avatar-{kind}{n}.png")
         out.write_bytes(img)
         print(f"#{n}: saved {out}")
         if s.tg_token and s.tg_review_chat:
