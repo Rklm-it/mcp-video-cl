@@ -421,6 +421,7 @@ def _poller(bot: Bot, stop: threading.Event) -> None:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)  # its request lines carry the bot token in the URL
     if not bot_settings.token:
         raise SystemExit("Set PHOTO_BOT_TOKEN")
     api = Api(bot_settings.token)
