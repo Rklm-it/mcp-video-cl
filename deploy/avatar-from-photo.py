@@ -17,19 +17,19 @@ from video_mcp.reels import gemini, net
 from video_mcp.reels.config import reels_settings as s
 
 KEEP = (
-    "Use the man from this photo. Keep his face, identity, age, hairstyle and beard exactly the same — "
-    "it must be clearly the same person. Square avatar for a Telegram channel about personal finance, "
-    "must read well as a small circle: head and shoulders, centered, close-up. "
-    "No text, no letters, no digits, no watermark. "
+    "Edit this exact photo, do not redraw the person. The face must stay pixel-identical: same eyes, nose, "
+    "mouth, skin, facial hair, hairline and expression — do not beautify, slim, age or change it in any way. "
+    "Only change what is listed below. Crop to a square head-and-shoulders avatar, face centered and large, "
+    "so it reads well as a small circle. No text, no letters, no watermark. "
 )
 
 STYLES = [
-    "Professional studio portrait photo: soft warm light, shallow depth of field, calm confident friendly "
-    "smile, dark navy sweater, clean muted warm orange-beige background. Photorealistic, not a cartoon.",
-    "Premium editorial illustration in a realistic painterly style (like a magazine columnist portrait): "
-    "natural proportions, subtle brush texture, warm colours, soft teal background. Not a cartoon.",
-    "Clean modern portrait photo with soft rim light, light-grey background, holding a simple calculator "
-    "near the chest, smart trustworthy look. Photorealistic, not a cartoon.",
+    "Replace only the background with a clean soft warm orange-beige studio backdrop and even out the "
+    "lighting to soft daylight. Keep the clothes as they are.",
+    "Replace only the background with a soft muted teal studio backdrop, add gentle studio lighting, "
+    "and change the clothing to a plain dark navy sweater.",
+    "Replace only the background with a clean light-grey studio backdrop with soft rim light, "
+    "and change the clothing to a plain grey hoodie.",
 ]
 
 
