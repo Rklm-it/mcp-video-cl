@@ -38,6 +38,24 @@ def generate(prompt: str, out: Path, seed: int) -> Path:
     return fit(Image.open(io.BytesIO(raw)), out)
 
 
+ASPECTS = {"1:1": (1024, 1024), "9:16": (1080, 1920), "16:9": (1920, 1080), "3:4": (1080, 1440), "4:3": (1440, 1080)}
+
+
+def picture(prompt: str, aspect: str = "1:1", seed: int = 1) -> Image.Image:
+    """One standalone picture (avatar, cover, post image): the prompt as is, no scene setting added."""
+    provider = reels_settings.images
+    width, height = ASPECTS[aspect]
+    if provider == "gemini":
+        raw = _gemini(prompt, aspect)
+    elif provider == "openai":
+        raw = _openai(prompt)
+    elif provider == "pollinations":
+        raw = _pollinations(prompt, seed, width, height)
+    else:
+        return Image.new("RGB", (width, height), "gray")
+    return Image.open(io.BytesIO(raw)).convert("RGB")
+
+
 def fit(image: Image.Image, out: Path) -> Path:
     """Scale and centre-crop to exactly 1080x1920."""
     image = image.convert("RGB")
@@ -57,10 +75,10 @@ def _cut_watermark(image: Image.Image) -> Image.Image:
     return image.crop((0, 0, image.width, round(image.height * (1 - POLLINATIONS_WATERMARK))))
 
 
-def _pollinations(prompt: str, seed: int) -> bytes:
+def _pollinations(prompt: str, seed: int, width: int = W, height: int = H) -> bytes:
     resp = net.get(
         f"https://image.pollinations.ai/prompt/{quote(prompt)}",
-        params={"width": W, "height": H, "nologo": "true", "seed": seed},
+        params={"width": width, "height": height, "nologo": "true", "seed": seed},
         timeout=180,
         follow_redirects=True,
     )
@@ -68,13 +86,13 @@ def _pollinations(prompt: str, seed: int) -> bytes:
     return resp.content
 
 
-def _gemini(prompt: str) -> bytes:
+def _gemini(prompt: str, aspect: str = "9:16") -> bytes:
     resp = net.post(
         gemini.url(f"models/{reels_settings.gemini_image_model}:generateContent"),
         headers=gemini.headers(),
         json={
             "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"responseModalities": ["IMAGE"], "imageConfig": {"aspectRatio": "9:16"}},
+            "generationConfig": {"responseModalities": ["IMAGE"], "imageConfig": {"aspectRatio": aspect}},
         },
         timeout=180,
     )

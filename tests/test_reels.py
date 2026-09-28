@@ -542,3 +542,24 @@ def _png():
     buf = io.BytesIO()
     Image.new("RGB", (1080, 1920), "gray").save(buf, format="PNG")
     return buf.getvalue()
+
+
+async def test_generate_image_returns_full_size_picture_without_voice(monkeypatch):
+    import base64 as b64
+
+    from PIL import Image
+
+    from video_mcp.reels import images
+
+    asked = []
+    buf = io.BytesIO()
+    Image.new("RGB", (1024, 1024), "orange").save(buf, format="PNG")
+    monkeypatch.setattr(reels_settings, "images", "gemini")
+    monkeypatch.setattr(images, "_gemini", lambda prompt, aspect="9:16": asked.append(aspect) or buf.getvalue())
+    monkeypatch.setattr(tts, "synthesize", lambda *a: pytest.fail("no voice for a picture"))
+    result = await call("generate_image", prompt="mascot", aspect="1:1")
+    assert not result.isError
+    assert asked == ["1:1"]
+    image = Image.open(io.BytesIO(b64.b64decode(result.content[1].data)))
+    assert image.size == (1024, 1024)
+    assert list((reels_settings.root / "images").glob("*.png"))

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import base64
+import io
 import logging
 import shutil
 import threading
 import time
+from pathlib import Path
 from typing import Annotated, Literal
 
 from mcp.server.fastmcp import Context, FastMCP
@@ -14,7 +17,7 @@ from pydantic import BaseModel, Field
 
 from .. import frames as fr
 from .. import sources as src_mod
-from . import jobs, publish, render
+from . import images, jobs, publish, render
 from .config import reels_settings
 
 log = logging.getLogger("video_mcp.reels")
@@ -317,6 +320,22 @@ def register(mcp: FastMCP, run) -> None:
             jobs.drop_media(job_id)
         return f"Reel {job_id} rejected"
 
+    @mcp.tool(annotations=WRITE, structured_output=False)
+    async def generate_image(
+        prompt: Annotated[str, Field(description="English picture prompt, used as is (no scene setting added)")],
+        aspect: Literal["1:1", "9:16", "16:9", "3:4", "4:3"] = "1:1",
+        send_to_review: Annotated[bool, Field(description="Also send the file to the Telegram review chat")] = False,
+    ) -> list[ContentBlock]:
+        """Draw one picture without a reel — no voice, subtitles or video: an avatar, a cover, a post image.
+        Returns it at full size and saves it to data/reels/images/ (paid, one picture per call)."""
+        from mcp.types import ImageContent
+
+        from ..server import _text
+
+        path, jpeg = await run(_draw, prompt, aspect, send_to_review)
+        return [_text(f"Saved {path}"),
+                ImageContent(type="image", data=base64.b64encode(jpeg).decode(), mimeType="image/jpeg")]
+
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True), structured_output=False)
     async def scout_channel(
         url: Annotated[str, Field(description="Channel URL (YouTube @handle, VK, TikTok…). For YouTube "
@@ -327,6 +346,21 @@ def register(mcp: FastMCP, run) -> None:
         """Competitor research: the channel's most viewed recent videos (title, views, link).
         Watch the best ones with analyze_video to learn their hooks and structure."""
         return await run(_scout, url, limit, top)
+
+
+def _draw(prompt: str, aspect: str, send_to_review: bool) -> tuple[Path, bytes]:
+    image = images.picture(prompt, aspect, seed=int(time.time()))
+    folder = reels_settings.root / "images"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / time.strftime("%m%d-%H%M%S.png")
+    image.save(path, format="PNG")
+    buf = io.BytesIO()
+    image.save(buf, format="JPEG", quality=92)
+    if send_to_review and reels_settings.review_enabled:
+        with path.open("rb") as f:
+            publish._tg("sendDocument", data={"chat_id": reels_settings.tg_review_chat, "caption": path.name},
+                        files={"document": (path.name, f, "image/png")})
+    return path, buf.getvalue()
 
 
 def process(job: dict, after: str, progress=lambda _f, _m: None) -> str:
