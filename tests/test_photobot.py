@@ -10,7 +10,7 @@ from video_mcp.photobot.config import bot_settings
 
 class FakeApi:
     def __init__(self):
-        self.sent, self.photos, self.albums, self.videos, self.audios = [], [], [], [], []
+        self.sent, self.photos, self.albums, self.videos, self.audios, self.resent = [], [], [], [], [], []
 
     def send(self, chat, text, rows=None, reply_keys=None):
         self.sent.append((chat, text, rows))
@@ -25,9 +25,14 @@ class FakeApi:
 
     def album(self, chat, images, caption=""):
         self.albums.append(images)
+        return [f"a{i}" for i in range(len(images))]
 
     def video(self, chat, path, caption=""):
         self.videos.append(path)
+        return f"video{len(self.videos)}"
+
+    def resend(self, chat, kind, ref):
+        self.resent.append((kind, ref))
 
     def audio(self, chat, path, title):
         self.audios.append(title)
@@ -81,7 +86,9 @@ def pay_with(monkeypatch, tx, status="CONFIRMED"):
 
 def test_start_shows_the_menu_and_greetings_section(bot):
     say(bot, "/start")
-    assert "sec:greet" in buttons(bot) and "p:restore" in buttons(bot) and "ref" in buttons(bot)
+    assert {"sec:greet", "sec:memory", "sec:family", "sec:fix", "orders", "ref"} <= set(buttons(bot))
+    bot.handle(press("sec:memory"))
+    assert "p:restore" in buttons(bot) and "p:together" in buttons(bot)
     bot.handle(press("sec:greet"))
     assert {"p:greet", "p:char", "p:card"} <= set(buttons(bot)) and "p:moroz" not in buttons(bot)
     assert "бесплатно" in bot.api.sent[-1][2][2][0][0]
@@ -112,7 +119,7 @@ def test_first_card_is_free_then_paid_via_platega(bot, monkeypatch):
 
 def test_photo_first_then_service_and_upsell_to_animate(bot, monkeypatch):
     bot.handle(photo_msg())
-    assert "p:restore" in buttons(bot)
+    assert "sec:memory" in buttons(bot)
     pay_with(monkeypatch, "tx5")
     bot.handle(press("p:restore"))
     bot.poll_pending()
@@ -335,6 +342,50 @@ def test_gateway_voice_falls_back_to_a_free_one(tmp_path, monkeypatch):
     monkeypatch.setattr(edge_tts, "Communicate", Talk)
     products.voice("Привет", tmp_path / "v.mp3", "host")
     assert used == ["ru-RU-DmitryNeural"]
+
+
+def test_two_photo_service_asks_both_photos_in_order(bot, monkeypatch):
+    pay_with(monkeypatch, "tx10")
+    got = []
+    monkeypatch.setattr(products, "baby", lambda p1, p2, link: got.append((p1, p2)) or b"img")
+    downloaded = []
+    real = bot.api.download
+    bot.api.download = lambda fid: downloaded.append(fid) or real(fid)
+    bot.handle(photo_msg())  # an earlier photo is not taken silently for a two-photo service
+    bot.handle(press("p:baby"))
+    assert "мамы" in bot.api.sent[-1][1]
+    bot.handle({"message": {"chat": {"id": 7}, "from": {"id": 7}, "photo": [{"file_id": "mom"}]}})
+    assert "папы" in bot.api.sent[-1][1]
+    bot.handle({"message": {"chat": {"id": 7}, "from": {"id": 7}, "photo": [{"file_id": "dad"}]}})
+    bot.poll_pending()
+    assert downloaded == ["mom", "dad"] and len(got) == 1
+
+
+def test_background_asks_which_scene(bot, monkeypatch):
+    pay_with(monkeypatch, "tx11")
+    made = []
+    monkeypatch.setattr(products, "background", lambda photo, key, link: made.append(key) or b"img")
+    bot.handle(press("p:bg"))
+    assert "b:white" in buttons(bot)
+    bot.handle(press("b:white"))
+    bot.handle(photo_msg())
+    bot.poll_pending()
+    assert made == ["white"]
+
+
+def test_my_orders_resends_results(bot, monkeypatch):
+    bot.handle(press("orders"))
+    assert "пока нет" in bot.api.sent[-1][1]
+    pay_with(monkeypatch, "tx12")
+    monkeypatch.setattr(products, "photoshoot", lambda photo, link: [b"1", b"2"])
+    bot.handle(photo_msg())
+    bot.handle(press("p:shoot"))
+    bot.poll_pending()
+    bot.handle(press("orders"))
+    assert "re:tx12" in buttons(bot)
+    bot.handle(press("re:tx12", uid=8))  # someone else's order is not sent
+    bot.handle(press("re:tx12"))
+    assert bot.api.resent == [("album", ["a0", "a1"])]
 
 
 def test_nearest_aspect_keeps_the_photo_shape():

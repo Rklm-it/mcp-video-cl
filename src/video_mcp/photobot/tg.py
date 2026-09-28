@@ -68,17 +68,26 @@ class Api:
                         files={"photo": ("photo.jpg", image, "image/jpeg")}, timeout=120)
         return (msg.get("photo") or [{}])[-1].get("file_id", "")
 
-    def album(self, chat: int | str, images: list[bytes], caption: str = "") -> None:
+    def resend(self, chat: int | str, kind: str, ref: str | list[str]) -> None:
+        """Send an earlier result again by its Telegram file_id (no upload)."""
+        if kind == "album":
+            self.call("sendMediaGroup", chat_id=chat, media=json.dumps([{"type": "photo", "media": f} for f in ref]))
+        else:
+            self.call("sendVideo" if kind == "video" else "sendPhoto", chat_id=chat, **{kind: ref})
+
+    def album(self, chat: int | str, images: list[bytes], caption: str = "") -> list[str]:
         media = [{"type": "photo", "media": f"attach://p{i}",
                   **({"caption": caption, "parse_mode": "HTML"} if i == 0 and caption else {})}
                  for i in range(len(images))]
         files = {f"p{i}": (f"p{i}.jpg", img, "image/jpeg") for i, img in enumerate(images)}
-        self.call("sendMediaGroup", chat_id=chat, media=json.dumps(media), files=files, timeout=180)
+        msgs = self.call("sendMediaGroup", chat_id=chat, media=json.dumps(media), files=files, timeout=180)
+        return [(m.get("photo") or [{}])[-1].get("file_id", "") for m in msgs]
 
-    def video(self, chat: int | str, path: Path, caption: str = "") -> None:
+    def video(self, chat: int | str, path: Path, caption: str = "") -> str:
         with path.open("rb") as f:
-            self.call("sendVideo", chat_id=chat, caption=caption or None, parse_mode="HTML",
-                      supports_streaming="true", files={"video": (path.name, f, "video/mp4")}, timeout=300)
+            msg = self.call("sendVideo", chat_id=chat, caption=caption or None, parse_mode="HTML",
+                            supports_streaming="true", files={"video": (path.name, f, "video/mp4")}, timeout=300)
+        return (msg.get("video") or {}).get("file_id", "")
 
     def audio(self, chat: int | str, path: Path, title: str) -> None:
         with path.open("rb") as f:

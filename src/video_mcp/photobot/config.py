@@ -26,6 +26,11 @@ class BotSettings:
     price_restore: int = field(default_factory=lambda: _env_int("PHOTO_BOT_PRICE_RESTORE", 99))
     price_style: int = field(default_factory=lambda: _env_int("PHOTO_BOT_PRICE_STYLE", 79))
     price_drawing: int = field(default_factory=lambda: _env_int("PHOTO_BOT_PRICE_DRAWING", 99))
+    price_enhance: int = field(default_factory=lambda: _env_int("PHOTO_BOT_PRICE_ENHANCE", 49))
+    price_bg: int = field(default_factory=lambda: _env_int("PHOTO_BOT_PRICE_BG", 79))
+    price_together: int = field(default_factory=lambda: _env_int("PHOTO_BOT_PRICE_TOGETHER", 99))
+    price_baby: int = field(default_factory=lambda: _env_int("PHOTO_BOT_PRICE_BABY", 99))
+    price_hug: int = field(default_factory=lambda: _env_int("PHOTO_BOT_PRICE_HUG", 199))
     # Ded Moroz video: off until the Russian speech of the video model is checked (planned for November)
     moroz_open: bool = field(default_factory=lambda: _env_bool("PHOTO_BOT_DED_MOROZ", False))
     # Unpaid payment links are forgotten after this many minutes
@@ -37,9 +42,7 @@ class BotSettings:
         return settings.data_dir / "photobot"
 
     def price(self, product: str) -> int:
-        return {"animate": self.price_animate, "card": self.price_card, "shoot": self.price_shoot,
-                "greet": self.price_greet, "moroz": self.price_moroz, "char": self.price_char,
-                "restore": self.price_restore, "style": self.price_style, "drawing": self.price_drawing}[product]
+        return getattr(self, f"price_{product}")
 
 
 bot_settings = BotSettings()

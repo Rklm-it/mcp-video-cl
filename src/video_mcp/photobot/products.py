@@ -16,7 +16,8 @@ from ..reels import gemini, net, video_gen
 from ..reels.config import reels_settings
 
 KEEP_FACE = (
-    "Use the person or people from this photo. Keep every face exactly recognisable: same face shape, eyes, nose, "
+    "Use the person or people (or the pet) from this photo. Keep every face exactly recognisable: same face shape, "
+    "eyes, nose, "
     "lips, eyebrows, hairline, hair colour, skin tone, age and build — do not beautify into a different person, "
     "do not add or remove people. Natural realistic skin and flattering soft light. "
     "No text, no letters, no digits, no watermark, no logos. "
@@ -83,14 +84,16 @@ def jpeg(image: Image.Image, quality: int = 92) -> bytes:
     return buf.getvalue()
 
 
-def edit(photo: bytes, prompt: str, aspect: str = "3:4") -> Image.Image:
-    """Gemini image editing: the photo plus an instruction, one picture back."""
+def edit(photo: bytes | list[bytes], prompt: str, aspect: str = "3:4") -> Image.Image:
+    """Gemini image editing: one or several photos plus an instruction, one picture back."""
+    photos = photo if isinstance(photo, list) else [photo]
     resp = net.post(
         gemini.url(f"models/{reels_settings.gemini_image_model}:generateContent"),
         headers=gemini.headers(),
         json={
             "contents": [{"parts": [
-                {"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(shrink(photo)).decode()}},
+                *({"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(shrink(p)).decode()}}
+                  for p in photos),
                 {"text": prompt},
             ]}],
             "generationConfig": {"responseModalities": ["IMAGE"], "imageConfig": {"aspectRatio": aspect}},
@@ -470,6 +473,12 @@ STYLES: dict[str, tuple[str, str]] = {
                                       "box has no text and no logos."),
     "hero": ("🦸 Супергерой", "Show them as an original superhero in a sleek costume of their own (no known heroes, "
                              "no logos), dramatic city rooftop at sunset."),
+    "cv": ("💼 Фото на резюме", "Make a professional business headshot for a CV: neat business-casual outfit, plain "
+                              "light-grey studio background, soft even light, friendly confident look, shoulders up."),
+    "aged": ("👴 Я в старости", "Show how this person will look at about 75 years old: natural realistic ageing, "
+                               "grey hair, wrinkles, same face and features, kind warm look, soft light."),
+    "child": ("🧒 Я в детстве", "Show how this person looked as a 6-year-old child: same eye shape, face features "
+                               "and hair colour, cute natural childhood photo, soft light."),
     "pet": ("🐾 Питомец-аристократ", "If there is a pet in the photo, paint the pet as a noble aristocrat in a "
                                     "Renaissance oil portrait with a velvet cape and a lace collar; otherwise do "
                                     "the same for the person."),
@@ -500,3 +509,71 @@ def style(photo: bytes, key: str, link: str) -> bytes:
 
 def drawing(photo: bytes, link: str) -> bytes:
     return jpeg(sign(edit(photo, DRAWING, nearest_aspect(photo)), link))
+
+
+# ---- photo fixes and two-photo products ----
+
+ENHANCE = (
+    "Improve the quality of this photo: make it sharp and clear, remove blur, noise and compression artefacts, fix "
+    "exposure and white balance, restore natural colours and fine details. Keep everything else exactly as it is: "
+    "same people, faces, pose, clothes, background and framing. No text, no watermark."
+)
+
+# key: (button, the new background)
+BACKGROUNDS: dict[str, tuple[str, str]] = {
+    "white": ("⬜ Белый фон — для Авито и маркетплейсов",
+              "a clean pure white studio background with a soft natural shadow under the item"),
+    "interior": ("🛋 Красивый интерьер", "a stylish bright modern interior that suits the item, soft daylight"),
+    "wood": ("🪵 Деревянный стол", "a warm wooden table surface with a softly blurred cozy background"),
+    "nature": ("🌿 Природа", "a fresh natural outdoor setting with greenery and soft sunlight, blurred background"),
+}
+BACKGROUND = (
+    "Keep the main object or person of this photo exactly as it is (shape, colours, labels, details, faces) and "
+    "replace everything around it with {scene}. Realistic lighting and shadows that match. Product-photo quality. "
+    "Do not add any text, logos or watermarks."
+)
+
+HUG = (
+    "The first photo shows a person now, the second shows the same person as a child. Make one warm, realistic "
+    "photo where the adult hugs their younger self: the adult looks exactly like the first photo and the child "
+    "exactly like the second (same faces, hair, clothes style), both smiling, cozy soft light, simple neutral "
+    "background, vertical framing, both large in the frame. No text, no watermark."
+)
+HUG_VIDEO = ("The adult gently hugs the child, both smile and sway a little, the child hugs back; tender, "
+             "natural movement, faces stay exactly the same")
+
+TOGETHER = (
+    "Put the people from all these photos together into one natural photo, as if they were photographed together: "
+    "standing close side by side, relaxed and warm, consistent light and colours, a simple pleasant background. "
+    "Keep every face exactly as in its photo — same features, age and hair; do not invent new people. "
+    "No text, no watermark."
+)
+
+BABY = (
+    "The two photos show a couple. Create a realistic portrait of their child at about 3 years old, naturally "
+    "combining the features of both parents (eyes, nose, lips, face shape, hair and skin colour). A cute happy "
+    "toddler, soft daylight, simple light background. No text, no watermark."
+)
+
+
+def enhance(photo: bytes, link: str) -> bytes:
+    return jpeg(sign(edit(photo, ENHANCE, nearest_aspect(photo)), link))
+
+
+def background(photo: bytes, key: str, link: str) -> bytes:
+    return jpeg(sign(edit(photo, BACKGROUND.format(scene=BACKGROUNDS[key][1]), nearest_aspect(photo)), link))
+
+
+def together(photo: bytes, photo2: bytes, link: str) -> bytes:
+    return jpeg(sign(edit([photo, photo2], TOGETHER, "4:3"), link))
+
+
+def baby(photo: bytes, photo2: bytes, link: str) -> bytes:
+    return jpeg(sign(edit([photo, photo2], BABY, "3:4"), link))
+
+
+def hug(photo: bytes, photo2: bytes, workdir: Path, link: str) -> Path:
+    picture = edit([photo, photo2], HUG, "9:16")
+    frame = vertical_frame(jpeg(picture), workdir / "frame.jpg")
+    raw = video_gen.animate(frame, HUG_VIDEO, 8, workdir / "raw.mp4", context=False)
+    return sign_video(raw, workdir / "hug.mp4", link)
