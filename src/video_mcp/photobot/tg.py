@@ -71,6 +71,11 @@ class Api:
             self.call("sendVideo", chat_id=chat, caption=caption or None, parse_mode="HTML",
                       supports_streaming="true", files={"video": (path.name, f, "video/mp4")}, timeout=300)
 
+    def audio(self, chat: int | str, path: Path, title: str) -> None:
+        with path.open("rb") as f:
+            self.call("sendAudio", chat_id=chat, title=title, performer="Оживи фото",
+                      files={"audio": (path.name, f, "audio/mpeg")}, timeout=120)
+
     def download(self, file_id: str) -> bytes:
         info = self.call("getFile", file_id=file_id)
         resp = httpx.get(f"{self.files}/{info['file_path']}", timeout=120)

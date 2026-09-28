@@ -219,7 +219,32 @@ GREETINGS: dict[str, tuple[str, str]] = {
     "thanks": ("{name}, спасибо тебе за всё! Ты очень дорогой для меня человек.", "Спасибо, {name}!"),
     "congrats": ("{name}, поздравляю от всей души! Пусть всё задуманное сбывается!", "{name}, поздравляю!"),
 }
-VOICES = {"f": "ru-RU-SvetlanaNeural", "m": "ru-RU-DmitryNeural"}
+# key: (button, engine, voice, style, sound effect). edge = free Microsoft voices (style = pitch, rate);
+# openai = the paid gateway voices (REELS_OPENAI_*, style = how to speak), fall back to FALLBACK.
+# Characters are folk and generic ones on purpose: no real people's voices and no copyrighted cartoon heroes.
+VOICES: dict[str, tuple[str, str, str, tuple[str, str] | str, str]] = {
+    "f": ("👩 Женский", "edge", "ru-RU-SvetlanaNeural", ("+0Hz", "+0%"), ""),
+    "m": ("👨 Мужской", "edge", "ru-RU-DmitryNeural", ("+0Hz", "+0%"), ""),
+    "soft": ("💖 Нежный", "openai", "shimmer", "Говори по-русски нежно и тепло, с улыбкой в голосе, неторопливо.", ""),
+    "host": ("🎤 Ведущий праздника", "openai", "ash",
+             "Говори по-русски торжественно и радостно, как ведущий праздника, с восклицаниями.", ""),
+    "kid": ("🧒 Детский", "edge", "ru-RU-SvetlanaNeural", ("+45Hz", "+8%"), ""),
+    "old": ("👴 Дедушка", "edge", "ru-RU-DmitryNeural", ("-18Hz", "-12%"), ""),
+    "moroz": ("🎅 Дед Мороз", "openai", "onyx",
+              "Говори по-русски как добрый сказочный Дед Мороз: низким басом, медленно, раскатисто и ласково.", ""),
+    "snow": ("❄️ Снегурочка", "openai", "coral",
+             "Говори по-русски как сказочная Снегурочка: звонко, нежно, с волшебной интонацией.", ""),
+    "tale": ("🧙 Сказочник", "openai", "fable",
+             "Говори по-русски как сказочник, который читает детям волшебную сказку: загадочно и тепло.", ""),
+    "yaga": ("🧹 Баба-Яга", "openai", "sage",
+             "Говори по-русски как смешная сказочная Баба-Яга: скрипучим старческим голосом, хитро и ворчливо.", ""),
+    "pirate": ("🏴‍☠️ Пират", "openai", "ash",
+               "Говори по-русски как весёлый капитан пиратов: хрипло, азартно, с раскатистым «р».", ""),
+    "toon": ("🐭 Мультяшный", "edge", "ru-RU-SvetlanaNeural", ("+90Hz", "+12%"), ""),
+    "robot": ("🤖 Робот", "edge", "ru-RU-DmitryNeural", ("-5Hz", "-5%"),
+              "aecho=0.8:0.9:8|16:0.5|0.3,flanger=delay=2:depth=3:speed=0.8,volume=1.4"),
+}
+FALLBACK = {"soft": "f", "host": "m", "moroz": "old", "snow": "f", "tale": "m", "yaga": "old", "pirate": "m"}
 MAX_OWN_TEXT = 160  # about 10 seconds of speech: the 8-second clip plus a short hold on the last frame
 
 # Ded Moroz speaks himself (the video model makes the voice); "boy"/"girl" for the Russian word endings
@@ -253,16 +278,52 @@ def _duration(path: Path) -> float:
     return probe_duration(path)
 
 
-def voice(text: str, out: Path, gender: str = "f") -> Path:
-    """Free Microsoft neural voice, female or male."""
+def voice(text: str, out: Path, key: str = "f") -> Path:
+    """Speech in one of VOICES; a gateway voice that fails falls back to a free one of the same kind."""
     import asyncio
 
     import edge_tts
 
-    async def speak() -> None:
-        await edge_tts.Communicate(text, VOICES.get(gender, VOICES["f"]), rate="+0%").save(str(out))
+    _, engine, name, style, effect = VOICES.get(key, VOICES["f"])
+    raw = out.with_name(out.stem + "-raw.mp3") if effect else out
+    if engine == "openai":
+        try:
+            _gateway_voice(text, raw, name, str(style))
+        except Exception:  # noqa: BLE001 - the gateway has bad days; a plainer voice beats no greeting
+            return voice(text, out, FALLBACK.get(key, "f"))
+    else:
+        pitch, rate = style
 
-    asyncio.run(speak())
+        async def speak() -> None:
+            await edge_tts.Communicate(text, name, rate=rate, pitch=pitch).save(str(raw))
+
+        asyncio.run(speak())
+    if effect:
+        _ff("-i", str(raw), "-af", effect, "-c:a", "libmp3lame", "-b:a", "128k", str(out))
+        raw.unlink(missing_ok=True)
+    return out
+
+
+def _gateway_voice(text: str, out: Path, name: str, instructions: str) -> Path:
+    s = reels_settings
+    if not s.openai_key:
+        raise ValueError("no speech gateway")
+    resp = net.post(f"{s.openai_base_url.rstrip('/')}/audio/speech", timeout=120,
+                    headers={"Authorization": f"Bearer {s.openai_key}"},
+                    json={"model": s.openai_tts_model, "voice": name, "input": text,
+                          "instructions": instructions, "response_format": "mp3"})
+    if resp.status_code >= 400 or len(resp.content) < 1000:
+        raise RuntimeError(f"Speech API error {resp.status_code}: {resp.text[:200]}")
+    out.write_bytes(resp.content)
+    return out
+
+
+def voice_sample(key: str, cache_dir: Path) -> Path:
+    """A short example of the voice, made once."""
+    out = cache_dir / f"voice-{key}.mp3"
+    if not out.exists():
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        voice("Маша, с днём рождения! Пусть этот год будет самым счастливым!", out, key)
     return out
 
 
@@ -280,7 +341,7 @@ def clean_name(text: str) -> str:
     return name[:1].upper() + name[1:] if name else ""
 
 
-def greeting(photo: bytes, occasion: str, name: str, workdir: Path, link: str, gender: str = "f",
+def greeting(photo: bytes, occasion: str, name: str, workdir: Path, link: str, voice_key: str = "f",
              text: str = "") -> Path:
     """The customer's photo in a festive scene comes alive, a voice congratulates `name` (a ready text for the
     occasion or the customer's own), the title is on screen."""
@@ -291,7 +352,7 @@ def greeting(photo: bytes, occasion: str, name: str, workdir: Path, link: str, g
                                       "centered.", "9:16")
     frame = vertical_frame(jpeg(picture), workdir / "frame.jpg")
     raw = video_gen.animate(frame, ANIMATE_PROMPT, 8, workdir / "raw.mp4", context=False)
-    speech = voice(spoken, workdir / "voice.mp3", gender)
+    speech = voice(spoken, workdir / "voice.mp3", voice_key)
     total = max(_duration(raw), _duration(speech) + 1.0)
     (workdir / "title.txt").write_text(shown)
     (workdir / "link.txt").write_text(link)

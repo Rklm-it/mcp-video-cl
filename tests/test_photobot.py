@@ -10,7 +10,7 @@ from video_mcp.photobot.config import bot_settings
 
 class FakeApi:
     def __init__(self):
-        self.sent, self.photos, self.albums, self.videos = [], [], [], []
+        self.sent, self.photos, self.albums, self.videos, self.audios = [], [], [], [], []
 
     def send(self, chat, text, rows=None):
         self.sent.append((chat, text, rows))
@@ -27,6 +27,9 @@ class FakeApi:
 
     def video(self, chat, path, caption=""):
         self.videos.append(path)
+
+    def audio(self, chat, path, title):
+        self.audios.append(title)
 
     def download(self, file_id):
         buf = io.BytesIO()
@@ -177,6 +180,11 @@ def test_video_greeting_asks_name_voice_and_text(bot, monkeypatch):
     bot.handle(press("g:wedding"))
     assert "имя" in bot.api.sent[-1][1]
     say("маша!!")
+    voices = [v for row in bot.api.sent[-1][2] for _, v in row]
+    assert "v:host" in voices and "v:demo" in voices
+    monkeypatch.setattr(products, "voice_sample", lambda key, cache: cache / f"{key}.mp3")
+    bot.handle(press("v:demo"))
+    assert len(bot.api.audios) == len(products.VOICES)
     bot.handle(press("v:m"))
     assert "Маша, поздравляем со свадьбой" in bot.api.sent[-1][1]
     bot.handle(press("t:own"))
@@ -216,7 +224,7 @@ def test_greeting_video_has_voice_and_title(tmp_path, monkeypatch):
                         "color=c=blue:s=720x1280:d=2", "-pix_fmt", "yuv420p", str(out)], check=True)
         return out
 
-    def fake_voice(text, out, gender="f"):
+    def fake_voice(text, out, key="f"):
         subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
                         "sine=frequency=300:duration=3", "-c:a", "libmp3lame", str(out)], check=True)
         return out
@@ -237,3 +245,25 @@ def test_clean_name():
     assert products.clean_name("  маша!! ") == "Маша"
     assert products.clean_name("Анна-Мария 123") == "Анна-Мария"
     assert products.clean_name("123") == ""
+
+
+def test_gateway_voice_falls_back_to_a_free_one(tmp_path, monkeypatch):
+    used = []
+
+    def broken(*a):
+        raise RuntimeError("500")
+
+    monkeypatch.setattr(products, "_gateway_voice", broken)
+
+    class Talk:
+        def __init__(self, text, name, rate, pitch):
+            used.append(name)
+
+        async def save(self, path):
+            open(path, "wb").write(b"mp3")
+
+    import edge_tts
+
+    monkeypatch.setattr(edge_tts, "Communicate", Talk)
+    products.voice("Привет", tmp_path / "v.mp3", "host")
+    assert used == ["ru-RU-DmitryNeural"]

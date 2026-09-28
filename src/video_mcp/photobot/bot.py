@@ -127,7 +127,9 @@ class Bot:
             self.api.send(chat, "Кого поздравляет Дед Мороз?", [[("👦 Мальчика", "m:boy"), ("👧 Девочку", "m:girl")]])
         elif data in ("m:boy", "m:girl"):
             self.ask(chat, user, "name", {"product": "moroz", "gender": data[2:]})
-        elif data in ("v:f", "v:m") and user.get("draft"):
+        elif data == "v:demo":
+            self.voice_demo(chat)
+        elif data.startswith("v:") and data[2:] in products.VOICES and user.get("draft"):
             self.choose_text(chat, user, data[2:])
         elif data == "t:ready" and user.get("draft"):
             with self.state.lock:
@@ -179,7 +181,7 @@ class Bot:
                     user.pop("draft", None)
                 self.order(chat, who, "moroz", draft)
             else:
-                self.api.send(chat, "Каким голосом поздравить?", [[("👩 Женский", "v:f"), ("👨 Мужской", "v:m")]])
+                self.api.send(chat, "Каким голосом поздравить?", self.voice_buttons())
         else:
             own = products.clean_text(text)
             if not own:
@@ -191,9 +193,23 @@ class Bot:
                 user.pop("draft", None)
             self.order(chat, who, draft["product"], draft)
 
-    def choose_text(self, chat: int, user: dict, gender: str) -> None:
+    @staticmethod
+    def voice_buttons() -> list[list[tuple[str, str]]]:
+        buttons = [(label, f"v:{key}") for key, (label, *_) in products.VOICES.items()]
+        return [buttons[i:i + 2] for i in range(0, len(buttons), 2)] + [[("🔊 Послушать голоса", "v:demo")]]
+
+    def voice_demo(self, chat: int) -> None:
+        self.api.send(chat, "Сейчас пришлю примеры, пару секунд…")
+        for key, (label, *_) in products.VOICES.items():
+            try:
+                self.api.audio(chat, products.voice_sample(key, bot_settings.root / "voices"), label)
+            except Exception:  # noqa: BLE001
+                log.warning("voice sample %s failed", key, exc_info=True)
+        self.api.send(chat, "Каким голосом поздравить?", self.voice_buttons())
+
+    def choose_text(self, chat: int, user: dict, voice_key: str) -> None:
         with self.state.lock:
-            user["draft"]["voice"] = gender
+            user["draft"]["voice"] = voice_key
             self.state.save()
         draft = user["draft"]
         ready = products.GREETINGS[draft["occasion"]][0].format(name=draft["name"])
