@@ -46,6 +46,10 @@ OCCASIONS: dict[str, tuple[str, str, str]] = {
              "a gentle scene with pastel balloons, soft toys and warm light, tender mood"),
     "grad": ("🎓 Выпускной", "С выпускным!",
              "a graduation celebration: confetti, balloons, a festive school hall, bright joyful light"),
+    "teacher": ("👩‍🏫 День учителя", "С Днём учителя!",
+                "a bright school classroom with autumn flowers on the desk, warm sunlight, festive mood"),
+    "elders": ("👵 Бабушке и дедушке", "Любимым бабушке и дедушке!",
+               "a warm cozy home with autumn flowers, soft golden light, tender family mood"),
     "thanks": ("💐 Спасибо", "Спасибо за всё!",
                "a warm cozy scene with a big bouquet of fresh flowers, soft spring sunlight"),
     "congrats": ("🎉 Любой повод", "Поздравляю!",
@@ -216,6 +220,9 @@ GREETINGS: dict[str, tuple[str, str]] = {
     "baby": ("{name}, поздравляем с рождением малыша! Здоровья, крепкого сна и много счастья!",
              "{name}, с рождением малыша!"),
     "grad": ("{name}, с выпускным! Впереди столько нового — пусть всё получится!", "{name}, с выпускным!"),
+    "teacher": ("{name}, с Днём учителя! Спасибо за ваш труд, терпение и доброту!", "{name}, с Днём учителя!"),
+    "elders": ("{name}, спасибо вам за заботу и тепло! Здоровья, радости и долгих-долгих лет!",
+               "{name}, мы вас любим!"),
     "thanks": ("{name}, спасибо тебе за всё! Ты очень дорогой для меня человек.", "Спасибо, {name}!"),
     "congrats": ("{name}, поздравляю от всей души! Пусть всё задуманное сбывается!", "{name}, поздравляю!"),
 }
@@ -346,13 +353,18 @@ def greeting(photo: bytes, occasion: str, name: str, workdir: Path, link: str, v
     """The customer's photo in a festive scene comes alive, a voice congratulates `name` (a ready text for the
     occasion or the customer's own), the title is on screen."""
     _, _, scene = OCCASIONS[occasion]
-    spoken, shown = (s.format(name=name) for s in GREETINGS[occasion])
-    spoken = text or spoken
     picture = edit(photo, KEEP_FACE + f"Place them in {scene}. Portrait orientation, the people large and "
                                       "centered.", "9:16")
     frame = vertical_frame(jpeg(picture), workdir / "frame.jpg")
     raw = video_gen.animate(frame, ANIMATE_PROMPT, 8, workdir / "raw.mp4", context=False)
-    speech = voice(spoken, workdir / "voice.mp3", voice_key)
+    return _voiced(raw, occasion, name, text, voice_key, workdir, link)
+
+
+def _voiced(raw: Path, occasion: str, name: str, text: str, voice_key: str, workdir: Path, link: str) -> Path:
+    """The clip plus the spoken greeting, the title with the name and the bot link; the last frame holds
+    while the voice is still speaking."""
+    spoken, shown = (s.format(name=name) for s in GREETINGS[occasion])
+    speech = voice(text or spoken, workdir / "voice.mp3", voice_key)
     total = max(_duration(raw), _duration(speech) + 1.0)
     (workdir / "title.txt").write_text(shown)
     (workdir / "link.txt").write_text(link)
@@ -367,6 +379,50 @@ def greeting(photo: bytes, occasion: str, name: str, workdir: Path, link: str, v
         "-map", "[v]", "-map", "[a]", "-t", f"{total:.2f}", "-c:v", "libx264", "-preset", "veryfast",
         "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(out))
     return out
+
+
+# Greetings without a photo, from our own characters. Only original and folk characters: known heroes of
+# films and cartoons (Marvel, Disney, Soyuzmultfilm…) belong to their owners.
+# key: (button, look for the picture model, voice key)
+CHARACTERS: dict[str, tuple[str, str, str]] = {
+    "hero": ("🦸 Супергерой", "a friendly original superhero with a sleek silver-and-blue suit and a flowing cape, "
+                             "no emblems, no logos, not resembling any known hero", "host"),
+    "dragon": ("🐉 Дракончик", "a cute small green dragon with big kind eyes and tiny wings", "toon"),
+    "dino": ("🦖 Динозаврик", "a cheerful cute orange baby dinosaur with a party hat", "kid"),
+    "fairy": ("🧚 Фея", "a kind fairy with shimmering wings and a glowing magic wand", "snow"),
+    "wizard": ("🧙 Волшебник", "a kind old wizard with a long white beard, starry robe and a magic staff", "tale"),
+    "pirate": ("🏴‍☠️ Пират", "a jolly pirate captain with a tricorn hat and a parrot on his shoulder", "pirate"),
+    "robot": ("🤖 Робот", "a friendly shiny round robot with glowing blue eyes", "robot"),
+    "princess": ("👸 Принцесса", "a kind fairy-tale princess in a light blue gown with a small crown", "soft"),
+    "bear": ("🐻 Мишка", "a big soft friendly brown teddy bear", "old"),
+    "cosmo": ("👨‍🚀 Космонавт", "a smiling cosmonaut in a white spacesuit with the helmet off", "m"),
+}
+CHARACTER_VIDEO = (
+    "The character looks into the camera, smiles, waves happily and celebrates, then speaks warmly to the viewer; "
+    "lively cartoon-like animation, festive mood"
+)
+
+
+def character_picture(key: str, occasion: str, cache_dir: Path) -> Path:
+    """The character in the occasion's scene, made once per pair and reused."""
+    out = cache_dir / f"char-{key}-{occasion}.jpg"
+    if not out.exists():
+        from ..reels import images
+
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        _, look, _ = CHARACTERS[key]
+        _, _, scene = OCCASIONS[occasion]
+        prompt = (f"Vertical 9:16 bright 3D animated movie still: {look}, in {scene}, facing the camera, "
+                  "centered, full of joy, soft cinematic light. No text, no letters, no watermark, no logos.")
+        images.picture(prompt, "9:16").save(out, format="JPEG", quality=92)
+    return out
+
+
+def character_greeting(key: str, occasion: str, name: str, text: str, workdir: Path, link: str,
+                       cache_dir: Path) -> Path:
+    frame = vertical_frame(character_picture(key, occasion, cache_dir).read_bytes(), workdir / "frame.jpg")
+    raw = video_gen.animate(frame, CHARACTER_VIDEO, 8, workdir / "raw.mp4", context=False)
+    return _voiced(raw, occasion, name, text, CHARACTERS[key][2], workdir, link)
 
 
 def moroz_picture(cache: Path) -> Path:
@@ -384,3 +440,63 @@ def moroz(gender: str, name: str, workdir: Path, link: str, cache: Path) -> Path
     raw = video_gen.animate(moroz_picture(cache), MOROZ_VIDEO.format(text=text), 8, workdir / "raw.mp4",
                             context=False, audio=True)
     return sign_video(raw, workdir / "ded-moroz.mp4", link)
+
+
+# ---- single-picture products: old photo restoration, looks, a child's drawing ----
+
+RESTORE = (
+    "Restore this old photo: remove scratches, dust, cracks, folds, stains and noise, recover lost details, fix "
+    "faded contrast and gently sharpen, then colorize it with natural realistic colours true to the era. Keep the "
+    "faces, expressions, hair, clothes, background and composition exactly as they are; do not add or remove "
+    "anything, do not modernize. No text, no watermark."
+)
+
+# key: (button, instruction); the look keeps the person recognisable, a pet photo gets the look too
+STYLES: dict[str, tuple[str, str]] = {
+    "toon3d": ("🧸 3D-мультфильм", "Turn them into a charming 3D animated movie character: soft shapes, expressive "
+                                  "eyes, soft studio light, still clearly the same person."),
+    "anime": ("🎌 Аниме", "Redraw them as a beautiful anime illustration with clean lines and soft colours, "
+                         "still clearly the same person."),
+    "oil": ("🖼 Портрет маслом", "Turn the photo into a classic oil painting portrait with visible brushstrokes, "
+                                "rich warm colours and museum lighting."),
+    "royal": ("👑 Королевский портрет", "Make a regal 18th-century court portrait: luxurious historical attire, "
+                                       "jewellery, palace interior, painted in the old masters style."),
+    "space": ("🚀 Космонавт", "Show them as a cosmonaut in a white spacesuit with the helmet off, Earth and stars "
+                             "behind, cinematic light."),
+    "ussr": ("🎞 Ретро 70-х", "Make it look like a warm Soviet 1970s film photograph: period clothes and hairstyle, "
+                             "retro interior, soft film grain and faded colours."),
+    "figure": ("📦 Фигурка в коробке", "Turn them into a collectible toy figure standing in a clear blister box "
+                                      "with a few matching accessories, product photo on a clean background; the "
+                                      "box has no text and no logos."),
+    "hero": ("🦸 Супергерой", "Show them as an original superhero in a sleek costume of their own (no known heroes, "
+                             "no logos), dramatic city rooftop at sunset."),
+    "pet": ("🐾 Питомец-аристократ", "If there is a pet in the photo, paint the pet as a noble aristocrat in a "
+                                    "Renaissance oil portrait with a velvet cape and a lace collar; otherwise do "
+                                    "the same for the person."),
+}
+
+DRAWING = (
+    "This is a child's drawing. Turn it into a bright, charming 3D animated movie still: keep exactly the same "
+    "characters, objects, colours, composition and the child's ideas, just make them look real and magical, "
+    "with soft cinematic light. No text, no letters, no watermark."
+)
+
+ASPECT_RATIOS = {"1:1": 1.0, "3:4": 0.75, "4:3": 4 / 3, "9:16": 9 / 16, "16:9": 16 / 9}
+
+
+def nearest_aspect(photo: bytes) -> str:
+    """The supported picture shape closest to the photo's own, so nothing important is cropped."""
+    width, height = Image.open(io.BytesIO(photo)).size
+    return min(ASPECT_RATIOS, key=lambda a: abs(ASPECT_RATIOS[a] - width / height))
+
+
+def restore(photo: bytes, link: str) -> bytes:
+    return jpeg(sign(edit(photo, RESTORE, nearest_aspect(photo)), link))
+
+
+def style(photo: bytes, key: str, link: str) -> bytes:
+    return jpeg(sign(edit(photo, KEEP_FACE + STYLES[key][1], "3:4"), link))
+
+
+def drawing(photo: bytes, link: str) -> bytes:
+    return jpeg(sign(edit(photo, DRAWING, nearest_aspect(photo)), link))

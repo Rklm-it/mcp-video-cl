@@ -38,9 +38,15 @@ class Api:
             raise RuntimeError(f"Telegram getUpdates: {data.get('description')}")
         return data["result"]
 
-    def send(self, chat: int | str, text: str, rows: list[list[Button]] | None = None) -> dict:
+    def send(self, chat: int | str, text: str, rows: list[list[Button]] | None = None,
+             reply_keys: list[str] | None = None) -> dict:
+        """`rows` = buttons under the message; `reply_keys` = a permanent keyboard under the input field."""
+        markup = keyboard(rows) if rows else None
+        if reply_keys:
+            markup = json.dumps({"keyboard": [[{"text": k}] for k in reply_keys], "resize_keyboard": True,
+                                 "is_persistent": True})
         return self.call("sendMessage", chat_id=chat, text=text, parse_mode="HTML",
-                         disable_web_page_preview=True, reply_markup=keyboard(rows) if rows else None)
+                         disable_web_page_preview=True, reply_markup=markup)
 
     def edit(self, chat: int | str, message_id: int, text: str, rows: list[list[Button]] | None = None) -> None:
         try:
@@ -55,9 +61,12 @@ class Api:
         except (RuntimeError, httpx.HTTPError):
             pass
 
-    def photo(self, chat: int | str, image: bytes, caption: str = "") -> None:
-        self.call("sendPhoto", chat_id=chat, caption=caption or None, parse_mode="HTML",
-                  files={"photo": ("photo.jpg", image, "image/jpeg")}, timeout=120)
+    def photo(self, chat: int | str, image: bytes, caption: str = "", rows: list[list[Button]] | None = None) -> str:
+        """Returns the file_id of the sent photo (to reuse it without uploading again)."""
+        msg = self.call("sendPhoto", chat_id=chat, caption=caption or None, parse_mode="HTML",
+                        reply_markup=keyboard(rows) if rows else None,
+                        files={"photo": ("photo.jpg", image, "image/jpeg")}, timeout=120)
+        return (msg.get("photo") or [{}])[-1].get("file_id", "")
 
     def album(self, chat: int | str, images: list[bytes], caption: str = "") -> None:
         media = [{"type": "photo", "media": f"attach://p{i}",
