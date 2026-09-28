@@ -4,3 +4,4 @@
 |---|---|---|---|---|---|---|---|---|
 | 28.09.2026 | t01 Фабрика роликов | Дзен | https://dzen.ru/a/armLdv_Avyny7aYW | нет | | | | |
 | 28.09.2026 | t06b Дзен, vc.ru, Пикабу | Дзен | https://dzen.ru/a/arperDJ2RjADkZ_v | нет | | | | |
+| 28.09.2026 | t02 Сейв «до 15%» | Дзен | https://dzen.ru/a/arpi6BbU1DLU3ULg | Сейвы (sub1=dzen, sub2=t02) | | | | |
