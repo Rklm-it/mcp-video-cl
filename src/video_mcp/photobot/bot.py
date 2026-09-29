@@ -39,6 +39,7 @@ SERVICES: dict[str, tuple[str, str, str]] = {
     "together": ("👨‍👩‍👧 Соединить людей на одном фото", "общее фото", "около минуты"),
     "baby": ("👶 Каким будет наш ребёнок", "портрет вашего будущего ребёнка", "около минуты"),
     "hug": ("🤗 Обнять себя в детстве", "видео, где вы обнимаете себя маленького", "3–5 минут"),
+    "pvideo": ("🎬 Видео для карточки товара", "видео для карточки товара", "3–5 минут"),
     "custom": ("✍️ Картинка по вашему описанию", "картинку по вашему описанию", "около минуты"),
     "customvid": ("✍️ Видео по вашему описанию", "видео по вашему описанию", "3–5 минут"),
     "moroz": ("🎅 Видео от Деда Мороза", "видео от Деда Мороза", "3–5 минут"),
@@ -55,6 +56,7 @@ STEPS: dict[str, list[str]] = {
     "drawing": ["photo"],
     "enhance": ["photo"],
     "bg": ["scene", "photo"],
+    "pvideo": ["pscene", "photo"],
     "together": ["photo", "photo2"],
     "baby": ["photo", "photo2"],
     "hug": ["photo", "photo2"],
@@ -97,11 +99,13 @@ SECTIONS: dict[str, tuple[str, str, list[str]]] = {
     "custom": ("✍️ Свой запрос",
                "Опишите словами, что хотите, — с вашим фото или без него. Нейросеть сделает картинку или видео.",
                ["custom", "customvid"]),
-    "fix": ("🛠 Улучшить фото и фон",
-            "Сделать размытое фото чётким. Поставить товар или человека на белый фон для Авито и маркетплейсов "
-            "или в красивый интерьер.", ["enhance", "bg"]),
+    "fix": ("🛍 Продавцам и фото товаров",
+            "Видео для карточки на WB, Ozon и Авито из одного фото товара. Белый фон или красивый интерьер. "
+            "Размытое фото — чёткое.", ["pvideo", "bg", "enhance"]),
 }
 PHOTO_ASK = {
+    "pvideo": "Пришлите фото товара: целиком, на ровном фоне, без рук и лишних предметов. Лучше всего — фото с "
+              "карточки на WB или Ozon.",
     "restore": "Пришлите старое фото. Можно просто сфотографировать бумажный снимок телефоном — ровно и без бликов.",
     "drawing": "Пришлите фото детского рисунка — сверху, ровно, при хорошем свете.",
     "shoot": "Пришлите фото, где хорошо видно лицо: лучше крупно, при дневном свете, без очков от солнца.",
@@ -296,6 +300,8 @@ class Bot:
             self.answer(chat, who, user, "character", value)
         elif kind == "s" and value in products.STYLES:
             self.answer(chat, who, user, "style", value)
+        elif kind == "ps" and value in products.PRODUCT_SCENES:
+            self.answer(chat, who, user, "pscene", value)
         elif kind == "b" and value in products.BACKGROUNDS:
             self.answer(chat, who, user, "scene", value)
         elif kind == "m" and value in ("boy", "girl"):
@@ -413,6 +419,9 @@ class Bot:
         elif step == "style":
             buttons = [(label, f"s:{key}") for key, (label, _) in products.STYLES.items()]
             self.api.send(chat, "Какой образ?", _grid(buttons) + [back])
+        elif step == "pscene":
+            buttons = [(label, f"ps:{key}") for key, (label, _, _) in products.PRODUCT_SCENES.items()]
+            self.api.send(chat, "Какое видео нужно для карточки?", [[b] for b in buttons] + [back])
         elif step == "scene":
             buttons = [(label, f"b:{key}") for key, (label, _) in products.BACKGROUNDS.items()]
             self.api.send(chat, "Какой фон нужен?", [[b] for b in buttons] + [back])
@@ -634,6 +643,7 @@ class Bot:
                     "moroz": lambda: products.moroz(d["gender"], d["name"], workdir, self.link,
                                                     cache / "ded-moroz.jpg"),
                     "hug": lambda: products.hug(photo, photo2, workdir, self.link),
+                    "pvideo": lambda: products.product_video(photo, d["pscene"], workdir, self.link),
                     "customvid": lambda: products.custom_video(photo, d["prompt"], workdir, self.link),
                     "animate": lambda: products.animate(photo, workdir, self.link),
                 }[product]()

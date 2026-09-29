@@ -614,3 +614,31 @@ def allowed_request(text: str) -> bool:
 
     return not re.search(r"порн|голы[йея]|голая|обнаж|без одежд|секс|эрот|18\+|nsfw|nude|naked|кров[ьи]|"
                          r"убий|расчлен|наркот|свастик", text.lower())
+
+
+# ---- product video for marketplace cards (WB, Ozon, Avito) ----
+
+# key: (button, scene for the first frame, camera and motion for the video)
+PRODUCT_SCENES: dict[str, tuple[str, str, str]] = {
+    "studio": ("⬜ Студия, товар крутится",
+               "a clean light studio background with soft shadows, the product centered and large",
+               "the camera slowly orbits around the product, soft studio light glides over it, premium commercial look"),
+    "life": ("🛋 В интерьере, как в жизни",
+             "a stylish bright interior where this product is naturally used, the product centered and large",
+             "slow cinematic camera push-in on the product, soft daylight, gentle movement of the background, "
+             "lifestyle commercial look"),
+    "wow": ("✨ Эффектно: свет и частицы",
+            "a dark elegant background with warm rim light, the product centered and large, hero shot",
+            "slow dramatic camera move around the product, light sweeps and sparkling particles, luxury commercial"),
+}
+PRODUCT_KEEP = ("Keep the product exactly as in the photo: same shape, colours, materials, labels and details — do "
+                "not redesign it, do not add text or logos. ")
+
+
+def product_video(photo: bytes, scene: str, workdir: Path, link: str) -> Path:
+    """A vertical 8-second product clip for a marketplace card: the product in a new scene, then animated."""
+    _, place, motion = PRODUCT_SCENES[scene]
+    picture = edit(photo, PRODUCT_KEEP + f"Place it in {place}. Vertical 9:16 product photo.", "9:16")
+    frame = vertical_frame(jpeg(picture), workdir / "frame.jpg")
+    raw = video_gen.animate(frame, PRODUCT_KEEP + motion, 8, workdir / "raw.mp4", context=False)
+    return raw  # no bot link: sellers put the video on their own product card

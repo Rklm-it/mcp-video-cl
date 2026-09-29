@@ -436,3 +436,18 @@ def test_own_request_with_or_without_photo(bot, monkeypatch):
 def test_request_filter():
     assert products.allowed_request("Сделай меня рыцарем")
     assert not products.allowed_request("NSFW картинка")
+
+
+def test_product_video_for_sellers(bot, monkeypatch):
+    pay_with(monkeypatch, "tx20")
+    made = []
+    monkeypatch.setattr(products, "product_video", lambda photo, scene, workdir, link: made.append(scene) or workdir / "p.mp4")
+    bot.handle(press("sec:fix"))
+    assert buttons(bot)[0] == "p:pvideo"
+    bot.handle(press("p:pvideo"))
+    bot.handle(press("ps:studio"))
+    assert "товар" in bot.api.sent[-1][1]
+    bot.handle(photo_msg())
+    assert bot.state.orders["tx20"]["amount"] == bot_settings.price_pvideo
+    bot.poll_pending()
+    assert made == ["studio"] and len(bot.api.videos) == 1
