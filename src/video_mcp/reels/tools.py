@@ -196,6 +196,9 @@ def register(mcp: FastMCP, run) -> None:
         offer_id: Annotated[str | None, Field(description="Saved offer for ad reels (see save_offer)")] = None,
         music: Annotated[str | None, Field(description="Track name from the music folder, 'none' for no "
                                                        "music; default: a random track")] = None,
+        setting: Annotated[Literal["russia", "none"], Field(
+            description="russia = add the Russian scene setting to every picture; none = the prompts as written "
+                        "(abstract or tech visuals where streets and police do not belong)")] = "russia",
         background: Annotated[bool | None, Field(description="Render in the background and return at once. "
                                                             "Default: yes (a render outlasts the client's call timeout)")] = None,
         after: Annotated[
@@ -222,7 +225,7 @@ def register(mcp: FastMCP, run) -> None:
         job = {
             "id": jobs.new_id(), "created": time.strftime("%Y-%m-%d %H:%M:%S"), "status": "rendering",
             "title": title.strip(), "description": description.strip(), "hashtags": hashtags or [],
-            "offer_id": offer_id, "scenes": items, "music": music,
+            "offer_id": offer_id, "scenes": items, "music": music, "setting": setting,
         }
         jobs.save(job)
         if background is None:

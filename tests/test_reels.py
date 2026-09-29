@@ -143,7 +143,7 @@ async def test_animated_scene_uses_generated_clip(monkeypatch):
 
     calls = []
 
-    def fake_animate(image, prompt, seconds, out):
+    def fake_animate(image, prompt, seconds, out, context=True):
         calls.append((prompt, seconds))
         return make_clip(out)
 
@@ -164,7 +164,7 @@ async def test_animated_scene_uses_generated_clip(monkeypatch):
 async def test_failed_animation_falls_back_to_picture(monkeypatch):
     from video_mcp.reels import video_gen
 
-    def broken(*_args):
+    def broken(*_args, **_kwargs):
         raise RuntimeError("quota exceeded")
 
     monkeypatch.setattr(reels_settings, "video", "veo")
@@ -180,6 +180,21 @@ async def test_animated_scene_limit(monkeypatch):
     res = await call("create_reel", title="x", scenes=[
         {"text": "a", "image_prompt": "p", "animate": True}, {"text": "b", "image_prompt": "p", "animate": True}])
     assert res.isError and "limit is 1" in res.content[0].text
+
+
+async def test_setting_none_skips_scene_context(monkeypatch):
+    from video_mcp.reels import images
+
+    seen = []
+    real = images.generate
+    monkeypatch.setattr(images, "generate", lambda prompt, out, seed, context=True: seen.append(context)
+                        or real(prompt, out, seed, context))
+    res = await call("create_reel", background=False, title="x", setting="none",
+                     scenes=[{"text": "Пакеты летят.", "image_prompt": "packets"}])
+    assert not res.isError, res.content[0].text
+    res = await call("create_reel", background=False, title="y", scenes=[{"text": "Улица.", "image_prompt": "street"}])
+    assert not res.isError, res.content[0].text
+    assert seen == [False, True]
 
 
 async def test_background_music_is_mixed(tmp_path, monkeypatch):
@@ -284,7 +299,7 @@ async def test_animate_all_renders_in_background(monkeypatch):
 
     calls = []
 
-    def fake_animate(image, prompt, seconds, out):
+    def fake_animate(image, prompt, seconds, out, context=True):
         calls.append(prompt)
         return make_clip(out, color="blue")
 
@@ -518,6 +533,10 @@ def test_scene_context_goes_into_picture_and_video_prompts(tmp_path, monkeypatch
     monkeypatch.setattr(reels_settings, "scene_context", "")
     images.generate("courier on a bike", tmp_path / "p.png", 1)
     assert "Setting" not in prompts[1]
+
+    monkeypatch.setattr(reels_settings, "scene_context", "Setting: Russia")
+    images.generate("packets on a wire", tmp_path / "p.png", 1, context=False)
+    assert "Setting" not in prompts[2]
 
     monkeypatch.setattr(reels_settings, "scene_context", "Setting: Russia")
     monkeypatch.setattr(reels_settings, "video", "openai")

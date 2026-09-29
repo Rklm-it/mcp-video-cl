@@ -129,6 +129,10 @@ def pick_music(job: dict) -> Path | None:
     return track
 
 
+def _with_setting(job: dict) -> bool:
+    return job.get("setting", "russia") != "none"
+
+
 def _prepare_scene(job: dict, i: int, workdir: Path) -> SceneOut:
     scene = job["scenes"][i]
     stem = workdir / f"scene{i:02d}"
@@ -137,7 +141,8 @@ def _prepare_scene(job: dict, i: int, workdir: Path) -> SceneOut:
     else:
         png = stem.with_suffix(".png")
         if not png.exists():  # keep pictures when a reel is re-rendered
-            images.generate(scene["image_prompt"], png, seed=zlib.crc32(f"{job['id']}:{i}".encode()))
+            images.generate(scene["image_prompt"], png, seed=zlib.crc32(f"{job['id']}:{i}".encode()),
+                            context=_with_setting(job))
         visual, kind = png, "image"
     audio = stem.with_suffix(".mp3")
     words = tts.synthesize(scene["text"], audio)
@@ -152,7 +157,7 @@ def _animate_scene(job: dict, i: int, o: SceneOut, workdir: Path) -> Path | None
         return clip
     try:
         return video_gen.animate(o.visual, scene["image_prompt"] or scene["text"],
-                                 probe_duration(o.audio) + PAUSE, clip)
+                                 probe_duration(o.audio) + PAUSE, clip, context=_with_setting(job))
     except Exception as exc:  # a still picture is better than a failed reel
         log.warning("Scene %s animation failed: %s", i, exc)
         job.setdefault("warnings", []).append(f"scene {i}: video generation failed, used the picture ({exc})"[:300])

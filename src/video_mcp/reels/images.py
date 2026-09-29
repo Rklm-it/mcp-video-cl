@@ -21,10 +21,11 @@ IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
 MAX_MEDIA_BYTES = 300 * 1024 * 1024
 
 
-def generate(prompt: str, out: Path, seed: int) -> Path:
-    """Generate a 1080x1920 picture for `prompt` and save it as PNG."""
+def generate(prompt: str, out: Path, seed: int, context: bool = True) -> Path:
+    """Generate a 1080x1920 picture for `prompt` and save it as PNG. `context=False` skips the scene setting."""
     provider = reels_settings.images
-    full = ". ".join(filter(None, [prompt, reels_settings.scene_context, reels_settings.image_style]))
+    setting = reels_settings.scene_context if context else ""
+    full = ". ".join(filter(None, [prompt, setting, reels_settings.image_style]))
     if provider == "pollinations":
         return fit(_cut_watermark(Image.open(io.BytesIO(_pollinations(full, seed)))), out)
     elif provider == "gemini":
