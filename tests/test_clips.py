@@ -36,3 +36,13 @@ def test_subtitle_words_are_timed_from_the_clip_start():
     words = clips.subtitle_words(segs, 9, 20)
     assert [w.text for w in words] == ["первое", "слово"]
     assert 0.9 <= words[0].start < words[1].start < 3.1
+
+
+def test_transparent_banner_is_trimmed_to_the_logo(tmp_path):
+    from PIL import Image
+
+    canvas = Image.new("RGBA", (1000, 600), (0, 0, 0, 0))
+    canvas.paste((255, 0, 0, 255), (400, 250, 600, 350))
+    canvas.save(tmp_path / "b.png")
+    out = clips.trim_picture(tmp_path / "b.png")
+    assert Image.open(out).size == (280, 180)

@@ -62,8 +62,26 @@ def _fetch(ref: str, dest: Path) -> Path:
     return src_mod._resolve_local(ref).path
 
 
+def trim_picture(path: Path) -> Path:
+    """Banners often come as a logo in the middle of a big transparent canvas: keep just the logo
+    (plus a margin for its glow), so banner_width sizes the logo itself."""
+    from PIL import Image
+
+    image = Image.open(path)
+    if image.mode != "RGBA":
+        return path
+    box = image.getchannel("A").point(lambda v: 255 if v > 200 else 0).getbbox()
+    if not box:
+        return path
+    pad = int(0.04 * max(image.size))
+    box = (max(0, box[0] - pad), max(0, box[1] - pad), min(image.width, box[2] + pad), min(image.height, box[3] + pad))
+    out = path.with_name(path.stem + "-trim.png")
+    image.crop(box).save(out)
+    return out
+
+
 def make_clip(source: str, start: float, end: float, *, layout: str = "blur", subtitles: bool = True,
-              hook: str = "", banner: str = "", banner_position: str = "top", banner_width: float = 0.8,
+              hook: str = "", banner: str = "", banner_position: str = "top", banner_width: float = 0.7,
               green_screen: bool = True, lang: str | None = None) -> Path:
     if end <= start:
         raise ValueError("end must be after start")
@@ -87,6 +105,8 @@ def make_clip(source: str, start: float, end: float, *, layout: str = "blur", su
     if banner:
         path = _fetch(banner, stem.with_name(stem.name + "-banner"))
         is_video = path.suffix.lower() in (".mp4", ".mov", ".webm", ".mkv")
+        if not is_video:
+            path = trim_picture(path)
         inputs += (["-stream_loop", "-1"] if is_video else ["-loop", "1"]) + ["-i", str(path)]
         key = "chromakey=0x00FF00:0.18:0.08," if green_screen and is_video else ""
         y = "160" if banner_position == "top" else f"H-h-{int(H * 0.24)}"
