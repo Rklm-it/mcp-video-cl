@@ -499,3 +499,31 @@ def test_character_picture_is_made_once(tmp_path, monkeypatch):
 def test_request_filter():
     assert products.allowed_request("Сделай меня рыцарем")
     assert not products.allowed_request("NSFW картинка")
+
+
+def test_superhero_with_the_name(bot, monkeypatch, made):
+    pay_with(monkeypatch, "tx30")
+    bot.handle(press("sec:family"))
+    assert buttons(bot)[0] == "svc:superhero"
+    bot.handle(press("go:superhero"))
+    assert "sh:fire" in buttons(bot)
+    bot.handle(press("sh:ice"))
+    bot.handle(photo_msg(file_id="kid1"))
+    bot.handle(photo_msg(file_id="kid2"))
+    bot.handle(press("done"))
+    assert "Как зовут героя" in bot.api.sent[-1][1]
+    say(bot, "маша")
+    assert "Ледяной" in bot.api.sent[-1][1] and "Имя: Маша" in bot.api.sent[-1][1]
+    bot.handle(press("pay"))
+    bot.poll_pending()
+    assert made[0][0] == "superhero" and made[0][1]["hero"] == "ice" and made[0][2] == [b"kid1", b"kid2"]
+
+
+def test_superhero_prompt_is_original_and_titled(monkeypatch, tmp_path):
+    seen = []
+    monkeypatch.setattr(products, "edit", lambda photos, prompt, aspect="3:4":
+                        seen.append(prompt) or Image.new("RGB", (768, 1024), "blue"))
+    kind, _ = products.make("superhero", {"hero": "fire", "name": "Маша"}, [b"1", b"2"], [], tmp_path, "t.me/x",
+                            tmp_path)
+    assert kind == "photo" and 'letter "М"' in seen[0] and "Not resembling" in seen[0]
+    assert products.hero_title("Маша") == "Супер-Маша!"

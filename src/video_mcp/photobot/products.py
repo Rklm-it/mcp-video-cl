@@ -658,6 +658,31 @@ def product_video(photo: bytes, scene: str, workdir: Path, link: str) -> Path:
     return raw  # no bot link: sellers put the video on their own product card
 
 
+# ---- a personal superhero: an original hero with the customer's letter on the chest ----
+
+# key: (button, the hero's look). Original heroes only: no known characters, logos or signature costumes.
+HEROES: dict[str, tuple[str, str]] = {
+    "fire": ("🔥 Огненный", "a red and orange armored suit with glowing flame patterns, fire swirling around the hands"),
+    "ice": ("❄️ Ледяной", "a white and icy-blue crystal suit, snowflakes and frost sparkling in the air"),
+    "thunder": ("⚡ Громовержец", "a deep-blue suit with golden lightning lines, lightning crackling in the sky"),
+    "night": ("🌙 Ночной страж", "a sleek dark-grey armored suit with a long flowing cape, a night city with lights"),
+    "titan": ("🛡 Титан", "heavy polished steel armor with a round shield, standing on a mountain top at sunrise"),
+    "space": ("🚀 Космический", "a white and violet space suit with glowing stars, planets and a galaxy behind"),
+    "forest": ("🌿 Хранитель леса", "a green and golden leaf-patterned suit, a magical glowing forest around"),
+    "speed": ("💨 Молния-скорость", "a silver and turquoise aerodynamic suit, speed trails and wind streaks"),
+}
+HERO = (
+    "Show this person as a brand-new ORIGINAL superhero: {look}. A big bold letter \"{letter}\" as the emblem on "
+    "the chest. Heroic confident pose, dramatic comic-book cover lighting, cinematic, vivid colours. Not resembling "
+    "any existing hero from Marvel, DC or any film or cartoon: no known costumes, symbols or logos. "
+    "No other text or letters anywhere in the picture."
+)
+
+
+def hero_title(name: str) -> str:
+    return f"Супер-{name}!" if len(name) <= 12 else f"{name} — супергерой!"
+
+
 # ---- one entry point for the bot: any service from reference photos ----
 
 def make(product: str, d: dict, refs: list[bytes], refs2: list[bytes], workdir: Path, link: str,
@@ -673,6 +698,12 @@ def make(product: str, d: dict, refs: list[bytes], refs2: list[bytes], workdir: 
         return "photo", jpeg(sign(title(picture, greeting_text), link))
     if product == "style":
         return "photo", jpeg(sign(edit(refs, face + STYLES[d["style"]][1], "3:4"), link))
+    if product == "superhero":
+        look = HEROES[d["hero"]][1]
+        picture = edit(refs, face + HERO.format(look=look, letter=d["name"][0].upper()) +
+                       " Portrait orientation, the hero large and centered, calm space at the bottom for a caption.",
+                       "3:4")
+        return "photo", jpeg(sign(title(picture, hero_title(d["name"])), link))
     if product == "shoot":
         return "album", [jpeg(sign(edit(refs, face + s, "3:4"), link)) for s in SHOOT_STYLES]
     if product == "restore":

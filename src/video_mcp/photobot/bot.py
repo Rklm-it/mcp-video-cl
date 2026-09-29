@@ -75,6 +75,13 @@ SERVICES: dict[str, Service] = {
         "резюме; вы в старости или в детстве.",
         ("style", "photos"), "образ", "около минуты",
         ask="Пришлите <b>2–5 своих фото</b>, лицо крупно. Чем больше фото — тем больше похоже.", max_refs=8),
+    "superhero": Service(
+        "🦸 Супергерой с вашим именем",
+        "Ребёнок (или вы) — настоящий супергерой: свой костюм, первая буква имени на груди, эффектная обложка "
+        "в стиле комикса и надпись «Супер-Маша!». Огненный, ледяной, космический и другие.",
+        ("hero", "photos", "name"), "супергероя", "около минуты",
+        ask="Пришлите <b>2–5 фото</b> будущего героя, лицо крупно. Чем больше фото — тем больше похоже.",
+        max_refs=8),
     "animate": Service(
         "🎬 Оживить фото",
         "Люди на фото начинают двигаться: моргают, улыбаются, камера плавно приближается. Особенно трогательно "
@@ -146,11 +153,11 @@ SECTIONS: dict[str, tuple[str, str, list[str]]] = {
     "greet": ("🎁 Поздравления", "Видео и открытки на любой праздник — с вашим фото или от сказочного персонажа.",
               ["greet", "char", "card", "moroz"]),
     "photo": ("📸 Фотосессии и образы", "Красивые портреты и новые образы из ваших обычных селфи.",
-              ["shoot", "style"]),
+              ["shoot", "style", "superhero"]),
     "live": ("🎬 Живые фото", "Фотографии, которые двигаются.", ["animate", "hug"]),
     "memory": ("🕰 Старые фото", "Вернуть старым снимкам чёткость и цвет, собрать родных вместе.",
                ["restore", "enhance", "together", "animate"]),
-    "family": ("👨‍👩‍👧 Семья и дети", "Для мам, пап и бабушек.", ["baby", "drawing", "hug", "char"]),
+    "family": ("👨‍👩‍👧 Семья и дети", "Для мам, пап и бабушек.", ["superhero", "baby", "drawing", "hug", "char"]),
     "sellers": ("🛍 Продавцам", "Видео и фото для карточек на WB, Ozon и Авито.", ["pvideo", "bg", "enhance"]),
     "idea": ("✍️ Своя идея", "Опишите словами — нейросеть сделает картинку или видео.", ["custom", "customvid"]),
 }
@@ -161,6 +168,7 @@ PICK_STEPS = {  # step -> (question, callback prefix, options: key -> label, col
     "occasion": ("🎉 <b>Какой повод?</b>", "o", lambda: {k: v[0] for k, v in products.OCCASIONS.items()}, 2),
     "character": ("🦸 <b>Кто будет поздравлять?</b>", "h", lambda: {k: v[0] for k, v in products.CHARACTERS.items()}, 2),
     "style": ("✨ <b>Какой образ?</b>", "s", lambda: {k: v[0] for k, v in products.STYLES.items()}, 2),
+    "hero": ("🦸 <b>Какой супергерой?</b>", "sh", lambda: {k: v[0] for k, v in products.HEROES.items()}, 2),
     "pscene": ("🎬 <b>Какое видео нужно?</b>", "ps", lambda: {k: v[0] for k, v in products.PRODUCT_SCENES.items()}, 1),
     "scene": ("🛍 <b>Какой фон нужен?</b>", "b", lambda: {k: v[0] for k, v in products.BACKGROUNDS.items()}, 1),
     "gender": ("🎅 <b>Кого поздравляет Дед Мороз?</b>", "g", lambda: {"boy": "👦 Мальчика", "girl": "👧 Девочку"}, 2),
@@ -501,8 +509,8 @@ class Bot:
             rows = [[("🚫 Без фото", "nophoto")]] if s.min_refs == 0 else []
             self.show(chat, mid, f"📷 {text}\n\n<i>Когда пришлёте все фото — нажмите «Дальше».</i>", rows + [cancel])
         elif step == "name":
-            self.show(chat, mid, "✏️ <b>Как зовут того, кого поздравляем?</b>\n\nНапишите имя, например: Маша",
-                      [cancel])
+            who_name = "героя" if draft["product"] == "superhero" else "того, кого поздравляем"
+            self.show(chat, mid, f"✏️ <b>Как зовут {who_name}?</b>\n\nНапишите имя, например: Маша", [cancel])
         elif step == "prompt":
             self.show(chat, mid, "✍️ <b>Опишите, что хотите получить.</b> Чем подробнее — тем лучше.\n\n"
                                  "Например:\n• «Сделай меня рыцарем в доспехах на фоне замка»\n"
@@ -614,6 +622,7 @@ class Bot:
             "occasion": ("🎉 Повод", lambda v: products.OCCASIONS[v][0]),
             "character": ("🦸 Персонаж", lambda v: products.CHARACTERS[v][0]),
             "style": ("✨ Образ", lambda v: products.STYLES[v][0]),
+            "hero": ("🦸 Герой", lambda v: products.HEROES[v][0]),
             "pscene": ("🎬 Видео", lambda v: products.PRODUCT_SCENES[v][0]),
             "scene": ("🛍 Фон", lambda v: products.BACKGROUNDS[v][0]),
             "gender": ("👶 Кого", lambda v: {"boy": "мальчика", "girl": "девочку"}[v]),

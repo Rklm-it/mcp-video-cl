@@ -32,6 +32,7 @@ class BotSettings:
     price_baby: int = field(default_factory=lambda: _env_int("PHOTO_BOT_PRICE_BABY", 149))
     price_hug: int = field(default_factory=lambda: _env_int("PHOTO_BOT_PRICE_HUG", 299))
     price_pvideo: int = field(default_factory=lambda: _env_int("PHOTO_BOT_PRICE_PVIDEO", 349))
+    price_superhero: int = field(default_factory=lambda: _env_int("PHOTO_BOT_PRICE_SUPERHERO", 149))
     price_custom: int = field(default_factory=lambda: _env_int("PHOTO_BOT_PRICE_CUSTOM", 149))
     price_customvid: int = field(default_factory=lambda: _env_int("PHOTO_BOT_PRICE_CUSTOMVID", 249))
     # Ded Moroz video: off until the Russian speech of the video model is checked (planned for November)
