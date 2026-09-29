@@ -103,7 +103,7 @@ async def test_create_reel_renders_vertical_video_with_offer():
     # editing one scene re-renders but keeps the other pictures
     other_png = jobs.job_dir(job_id) / "scene00.png"
     mtime = other_png.stat().st_mtime_ns
-    res = await call("edit_reel", job_id=job_id, changes=[{"index": 1, "image_prompt": "wall calendar"}])
+    res = await call("edit_reel", job_id=job_id, background=False, changes=[{"index": 1, "image_prompt": "wall calendar"}])
     assert not res.isError, res.content[0].text
     assert other_png.stat().st_mtime_ns == mtime
 

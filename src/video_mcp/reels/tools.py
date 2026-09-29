@@ -76,10 +76,6 @@ def _check_wording(offer: dict | None, title: str, description: str, scenes: lis
                          + ". Rephrase (e.g. «доход», «заработок», «партнёр сервиса») and try again.")
 
 
-def _has_video(scenes: list[dict]) -> bool:
-    return reels_settings.video != "none" and any(s.get("animate") for s in scenes)
-
-
 def _check_animated(scenes: list[dict]) -> None:
     count = sum(1 for s in scenes if s.get("animate"))
     if count > reels_settings.max_animated:
@@ -240,6 +236,7 @@ def register(mcp: FastMCP, run) -> None:
         title: str | None = None,
         description: str | None = None,
         after: Literal["none", "review", "publish"] = "none",
+        background: Annotated[bool, Field(description="Render in the background and return at once")] = True,
         ctx: Context | None = None,
     ) -> list[ContentBlock]:
         """Change scenes (text, picture prompt, media, offer flag) or the post text and render again.
@@ -268,7 +265,7 @@ def register(mcp: FastMCP, run) -> None:
         _check_animated(job["scenes"])
         _check_wording(jobs.get_offer(job.get("offer_id")), job["title"], job.get("description", ""), job["scenes"])
         jobs.save(job)
-        return await build(job, after, ctx, _has_video(job["scenes"]))
+        return await build(job, after, ctx, background)
 
     @mcp.tool(annotations=READ, structured_output=False)
     async def list_reels(
