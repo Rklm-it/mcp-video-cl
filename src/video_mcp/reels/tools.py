@@ -201,7 +201,7 @@ def register(mcp: FastMCP, run) -> None:
         music: Annotated[str | None, Field(description="Track name from the music folder, 'none' for no "
                                                        "music; default: a random track")] = None,
         background: Annotated[bool | None, Field(description="Render in the background and return at once. "
-                                                            "Default: yes when the reel has AI video scenes")] = None,
+                                                            "Default: yes (a render outlasts the client's call timeout)")] = None,
         after: Annotated[
             Literal["none", "review", "publish"],
             Field(description="none = just render; review = send to the Telegram review chat; "
@@ -230,7 +230,7 @@ def register(mcp: FastMCP, run) -> None:
         }
         jobs.save(job)
         if background is None:
-            background = _has_video(items)
+            background = True
         return await build(job, after, ctx, background)
 
     @mcp.tool(annotations=WRITE, structured_output=False)

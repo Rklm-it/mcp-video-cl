@@ -79,7 +79,7 @@ async def test_create_reel_renders_vertical_video_with_offer():
     res = await call("save_offer", offer_id="card", advertiser="Банк", erid="abc123",
                      banner="Карта с кэшбэком — ссылка в профиле", link="https://example.com/x")
     assert not res.isError, res.content[0].text
-    res = await call("create_reel", title="Три ошибки с кэшбэком", offer_id="card", hashtags=["деньги"], scenes=[
+    res = await call("create_reel", background=False, title="Три ошибки с кэшбэком", offer_id="card", hashtags=["деньги"], scenes=[
         {"text": "Банк не доплачивает тебе кэшбэк.", "image_prompt": "bank card on a table"},
         {"text": "Проверь категории в начале месяца.", "image_prompt": "calendar"},
         {"text": "Карта с кэшбэком по ссылке в профиле.", "image_prompt": "happy person", "offer": True},
@@ -126,7 +126,7 @@ async def test_unknown_offer_is_rejected():
 
 
 async def test_scene_with_local_video_media(video_dir):
-    res = await call("create_reel", title="Клип", scenes=[{"text": "Смотри внимательно.", "media": "colors.mp4"}])
+    res = await call("create_reel", background=False, title="Клип", scenes=[{"text": "Смотри внимательно.", "media": "colors.mp4"}])
     assert not res.isError, res.content[0].text
     assert "— ready" in res.content[0].text
 
@@ -188,7 +188,7 @@ async def test_background_music_is_mixed(tmp_path, monkeypatch):
     subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi",
                     "-i", "sine=frequency=660:duration=1", "-c:a", "libmp3lame", str(music / "calm.mp3")], check=True)
     monkeypatch.setattr(reels_settings, "music_dir", str(music))
-    res = await call("create_reel", title="x", scenes=[{"text": "Музыка играет.", "image_prompt": "p"},
+    res = await call("create_reel", background=False, title="x", scenes=[{"text": "Музыка играет.", "image_prompt": "p"},
                                                        {"text": "И дальше.", "image_prompt": "q"}])
     assert not res.isError, res.content[0].text
     assert "Music: calm.mp3" in res.content[0].text
@@ -196,7 +196,7 @@ async def test_background_music_is_mixed(tmp_path, monkeypatch):
     info = probe(jobs.job_dir(job_id) / "reel.mp4")
     assert float(info["format"]["duration"]) == pytest.approx(2 * 1.45, abs=0.3)
 
-    res = await call("create_reel", title="y", music="none", scenes=[{"text": "Тишина.", "image_prompt": "p"}])
+    res = await call("create_reel", background=False, title="y", music="none", scenes=[{"text": "Тишина.", "image_prompt": "p"}])
     assert not res.isError and "Music:" not in res.content[0].text
 
 
