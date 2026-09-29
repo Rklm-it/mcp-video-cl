@@ -1,10 +1,12 @@
-"""Dialogue, orders and payments of the photo bot.
+"""Dialogue, orders and payments of the photo bot «Оживи фото».
 
-/start opens a menu of services. A service is a list of steps (occasion, photo, name, voice, text…); the bot
-asks for whatever is still missing, then makes an order. The first card is free, the rest is paid through a
-Platega link. A background loop polls pending payments; a paid order goes to a worker that makes the result
-and sends it. A failed job gives the customer a free retry of the same service.
-State lives in one JSON file under /data/photobot (the photos themselves are not stored)."""
+The menu is a short list of sections; a section lists services; a service opens a card that says in plain words
+what the customer gets, what to send, how long it takes and what it costs. «Начать» walks through the service's
+steps (occasion, several reference photos, name, voice, text…), then a summary screen shows the order and the
+price. The first card is free, the rest is paid through a Platega link; a background loop polls pending
+payments and a worker makes the result. A failed job gives the customer a free retry of the same service.
+Navigation edits one message instead of piling up new ones. State lives in /data/photobot/state.json (the
+photos themselves are not stored, only Telegram file ids)."""
 
 from __future__ import annotations
 
@@ -16,6 +18,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 
 from . import platega, products
@@ -24,117 +27,182 @@ from .tg import Api
 
 log = logging.getLogger("video_mcp.photobot")
 
-# key: (menu name, what the bot is making, how long it takes)
-SERVICES: dict[str, tuple[str, str, str]] = {
-    "greet": ("🎥 Видео-поздравление с вашим фото", "видео-поздравление", "3–5 минут"),
-    "char": ("🦸 Видео-поздравление от персонажа", "видео-поздравление", "3–5 минут"),
-    "card": ("💌 Открытка с вашим фото", "открытку", "около минуты"),
-    "animate": ("🎬 Оживить фото", "живое видео", "3–5 минут"),
-    "restore": ("🕰 Реставрация и цвет старого фото", "реставрацию", "около минуты"),
-    "style": ("✨ Образ по фото", "образ", "около минуты"),
-    "shoot": ("📸 Фотосессия (4 фото)", "фотосессию", "1–2 минуты"),
-    "drawing": ("🖍 Рисунок ребёнка → мультик", "мультик из рисунка", "около минуты"),
-    "enhance": ("🔍 Улучшить качество фото", "улучшение фото", "около минуты"),
-    "bg": ("🛍 Новый фон / фото товара", "фото с новым фоном", "около минуты"),
-    "together": ("👨‍👩‍👧 Соединить людей на одном фото", "общее фото", "около минуты"),
-    "baby": ("👶 Каким будет наш ребёнок", "портрет вашего будущего ребёнка", "около минуты"),
-    "hug": ("🤗 Обнять себя в детстве", "видео, где вы обнимаете себя маленького", "3–5 минут"),
-    "pvideo": ("🎬 Видео для карточки товара", "видео для карточки товара", "3–5 минут"),
-    "custom": ("✍️ Картинка по вашему описанию", "картинку по вашему описанию", "около минуты"),
-    "customvid": ("✍️ Видео по вашему описанию", "видео по вашему описанию", "3–5 минут"),
-    "moroz": ("🎅 Видео от Деда Мороза", "видео от Деда Мороза", "3–5 минут"),
+
+@dataclass(frozen=True)
+class Service:
+    title: str          # button and headings
+    about: str          # the card: what the customer gets, in plain words
+    steps: tuple        # what the bot asks, in order
+    doing: str          # «делаю …»
+    wait: str           # how long it takes
+    ask: str = ""       # what photos to send
+    min_refs: int = 1
+    max_refs: int = 5
+    ask2: str = ""      # the second set of photos (hug, baby)
+
+
+SERVICES: dict[str, Service] = {
+    "greet": Service(
+        "🎥 Видео-поздравление",
+        "Фото человека оживает на празднике: он улыбается, вокруг шарики, ёлка или цветы — под ваш повод. "
+        "Голос поздравляет по имени, имя крупно на экране. Можно выбрать голос и написать свой текст.",
+        ("occasion", "photos", "name", "voice", "text"), "видео-поздравление", "3–5 минут",
+        ask="Пришлите фото того, кого поздравляем. <b>Лучше 2–5 фото</b> с разных сторон — так лицо получится "
+            "точнее. Можно одним альбомом."),
+    "char": Service(
+        "🦸 Поздравление от персонажа",
+        "Дракончик, фея, супергерой, пират или робот поздравляют по имени. Фото не нужно — идеально для детей.",
+        ("character", "occasion", "name", "text"), "видео-поздравление", "3–5 минут"),
+    "card": Service(
+        "💌 Открытка с фото",
+        "Праздничная открытка: человек с вашего фото в красивой обстановке и крупная надпись — «С днём рождения!», "
+        "«Люблю тебя!» и другие.",
+        ("occasion", "photos"), "открытку", "около минуты",
+        ask="Пришлите фото того, кто будет на открытке. <b>Лучше 2–5 фото</b> — лицо получится точнее."),
+    "moroz": Service(
+        "🎅 Видео от Деда Мороза",
+        "Дед Мороз сам называет имя ребёнка, хвалит его и обещает подарок. Фото не нужно.",
+        ("gender", "name"), "видео от Деда Мороза", "3–5 минут"),
+    "shoot": Service(
+        "📸 Фотосессия: 4 фото",
+        "Четыре профессиональных портрета из ваших селфи: студия, офис, осенний парк, вечерний город.",
+        ("photos",), "фотосессию", "2–3 минуты",
+        ask="Пришлите <b>3–6 своих фото</b>: лицо крупно, при хорошем свете, с разных сторон. Чем больше фото — "
+            "тем больше похоже.", max_refs=8),
+    "style": Service(
+        "✨ Новый образ",
+        "Вы — в 3D-мультфильме, аниме, на портрете маслом, в образе короля, космонавта, супергероя; фото на "
+        "резюме; вы в старости или в детстве.",
+        ("style", "photos"), "образ", "около минуты",
+        ask="Пришлите <b>2–5 своих фото</b>, лицо крупно. Чем больше фото — тем больше похоже.", max_refs=8),
+    "animate": Service(
+        "🎬 Оживить фото",
+        "Люди на фото начинают двигаться: моргают, улыбаются, камера плавно приближается. Особенно трогательно "
+        "со старыми семейными снимками.",
+        ("photos",), "живое видео", "3–5 минут",
+        ask="Пришлите одно фото, которое нужно оживить.", max_refs=1),
+    "hug": Service(
+        "🤗 Обнять себя в детстве",
+        "Видео, где вы сегодняшний обнимаете себя маленького. Нужны ваши фото сейчас и детские.",
+        ("photos", "photos2"), "видео, где вы обнимаете себя маленького", "3–5 минут",
+        ask="Пришлите <b>1–3 своих фото сейчас</b>, лицо крупно.",
+        ask2="Теперь <b>1–3 ваших детских фото</b>. Бумажный снимок можно просто сфотографировать телефоном.",
+        max_refs=3),
+    "restore": Service(
+        "🕰 Реставрация старого фото",
+        "Уберём царапины, пятна и заломы, вернём чёткость и раскрасим в естественные цвета.",
+        ("photos",), "реставрацию", "около минуты",
+        ask="Пришлите старое фото. Бумажный снимок можно сфотографировать телефоном — ровно, без бликов.",
+        max_refs=1),
+    "enhance": Service(
+        "🔍 Улучшить качество",
+        "Размытое, тёмное или маленькое фото станет чётким и ярким. Всё остальное останется как было.",
+        ("photos",), "улучшение фото", "около минуты",
+        ask="Пришлите фото, которое нужно улучшить.", max_refs=1),
+    "together": Service(
+        "👨‍👩‍👧 Собрать всех на одном фото",
+        "Соединим на одном снимке людей с разных фото — например, тех, кто так и не сфотографировался вместе.",
+        ("photos",), "общее фото", "около минуты",
+        ask="Пришлите <b>2–6 фото — на каждом один человек</b>, лицо крупно.", min_refs=2, max_refs=6),
+    "baby": Service(
+        "👶 Каким будет наш ребёнок",
+        "Портрет вашего будущего малыша: нейросеть смешает черты мамы и папы.",
+        ("photos", "photos2"), "портрет вашего будущего ребёнка", "около минуты",
+        ask="Пришлите <b>1–3 фото мамы</b>, лицо крупно.", ask2="Теперь <b>1–3 фото папы</b>.", max_refs=3),
+    "drawing": Service(
+        "🖍 Детский рисунок → мультик",
+        "Рисунок ребёнка превратится в яркую картинку из мультфильма — с теми же героями и цветами.",
+        ("photos",), "мультик из рисунка", "около минуты",
+        ask="Пришлите фото рисунка — сверху, ровно, при хорошем свете.", max_refs=1),
+    "pvideo": Service(
+        "🎬 Видео для карточки товара",
+        "Видео 8 секунд для WB, Ozon или Авито: товар крутится в студии, стоит в интерьере или эффектно в свете. "
+        "Товар остаётся точно таким, как на фото.",
+        ("pscene", "photos"), "видео для карточки товара", "3–5 минут",
+        ask="Пришлите <b>1–4 фото товара</b> с разных сторон: целиком, без рук и лишних предметов.", max_refs=4),
+    "bg": Service(
+        "🛍 Товар на новом фоне",
+        "Поставим товар на белый фон для маркетплейса, в интерьер, на деревянный стол или на природу.",
+        ("scene", "photos"), "фото с новым фоном", "около минуты",
+        ask="Пришлите <b>1–3 фото товара</b>: целиком, без рук.", max_refs=3),
+    "custom": Service(
+        "🖼 Картинка по описанию",
+        "Опишите словами, что хотите, — с вашими фото или без. Например: «сделай меня рыцарем у замка» или "
+        "«рыжий кот в очках читает газету, акварель».",
+        ("prompt", "photos"), "картинку по вашему описанию", "около минуты",
+        ask="Пришлите фото, если запрос про вас (лучше 2–5 фото). Если фото не нужно — нажмите «Без фото».",
+        min_refs=0, max_refs=6),
+    "customvid": Service(
+        "🎞 Видео по описанию",
+        "Опишите, что должно происходить в видео, — с вашими фото или без. Например: «я еду на белом коне по "
+        "полю» или «уютный домик в зимнем лесу, идёт снег».",
+        ("prompt", "photos"), "видео по вашему описанию", "3–5 минут",
+        ask="Пришлите фото, если видео про вас (лучше 2–5 фото). Если фото не нужно — нажмите «Без фото».",
+        min_refs=0, max_refs=6),
 }
-# What each service needs, in the order the bot asks
-STEPS: dict[str, list[str]] = {
-    "greet": ["occasion", "photo", "name", "voice", "text"],
-    "char": ["character", "occasion", "name", "text"],
-    "card": ["occasion", "photo"],
-    "animate": ["photo"],
-    "restore": ["photo"],
-    "style": ["style", "photo"],
-    "shoot": ["photo"],
-    "drawing": ["photo"],
-    "enhance": ["photo"],
-    "bg": ["scene", "photo"],
-    "pvideo": ["pscene", "photo"],
-    "together": ["photo", "photo2"],
-    "baby": ["photo", "photo2"],
-    "hug": ["photo", "photo2"],
-    "custom": ["prompt", "photo"],
-    "customvid": ["prompt", "photo"],
-    "moroz": ["gender", "name"],
-}
-# Services that take two photos never reuse an earlier photo silently: the order of the two matters
-TWO_PHOTOS = {k for k, steps in STEPS.items() if "photo2" in steps}
-PHOTO2_ASK = {
-    "together": ("Пришлите фото первого человека (лицо крупно).", "Теперь фото второго человека."),
-    "baby": ("Пришлите фото мамы (лицо крупно, анфас).", "Теперь фото папы."),
-    "hug": ("Пришлите ваше фото сейчас (лицо крупно).", "Теперь ваше детское фото — можно снять бумажный снимок "
-                                                        "телефоном."),
-}
-PICTURES = {"card", "restore", "style", "drawing", "enhance", "bg", "together", "baby", "custom"}
-OPTIONAL_PHOTO = {"custom", "customvid"}
-PROMPT_TIPS = (
-    "✍️ Опишите словами, что сделать — чем подробнее, тем лучше.\n\n"
-    "<b>С вашим фото</b>, например:\n"
-    "• «Сделай меня рыцарем в доспехах на фоне замка»\n"
-    "• «Добавь на фото снег и новогодние огоньки»\n"
-    "• «Пусть я еду на белом коне по полю» (для видео)\n\n"
-    "<b>Без фото</b>, например:\n"
-    "• «Рыжий кот в очках читает газету в кафе, акварель»\n"
-    "• «Уютный домик в зимнем лесу, вечер, горят окна»\n\n"
-    "Нельзя: обнажёнка, жестокость, реальные знаменитости и политики, чужие бренды и мультгерои."
-)
-# Menu sections: key -> (title, text, services)
+
+# Menu sections: key -> (button, headline, services)
 SECTIONS: dict[str, tuple[str, str, list[str]]] = {
-    "memory": ("🕰 Старые фото и память",
-               "Верните старым фото чёткость и цвет, оживите их или соберите на одном фото людей, которые не "
-               "успели сфотографироваться вместе.", ["restore", "animate", "together", "enhance"]),
-    "looks": ("✨ Образы и фотосессии",
-              "Вы — в 3D-мультфильме, аниме, на королевском портрете, в космосе, на фото для резюме; "
-              "или сразу 4 фото в разных стилях.", ["style", "shoot"]),
-    "family": ("👨‍👩‍👧 Семья и дети",
-               "Обнять себя в детстве, увидеть вашего будущего ребёнка, превратить детский рисунок в мультик.",
-               ["hug", "baby", "drawing", "together"]),
-    "custom": ("✍️ Свой запрос",
-               "Опишите словами, что хотите, — с вашим фото или без него. Нейросеть сделает картинку или видео.",
-               ["custom", "customvid"]),
-    "fix": ("🛍 Продавцам и фото товаров",
-            "Видео для карточки на WB, Ozon и Авито из одного фото товара. Белый фон или красивый интерьер. "
-            "Размытое фото — чёткое.", ["pvideo", "bg", "enhance"]),
+    "greet": ("🎁 Поздравления", "Видео и открытки на любой праздник — с вашим фото или от сказочного персонажа.",
+              ["greet", "char", "card", "moroz"]),
+    "photo": ("📸 Фотосессии и образы", "Красивые портреты и новые образы из ваших обычных селфи.",
+              ["shoot", "style"]),
+    "live": ("🎬 Живые фото", "Фотографии, которые двигаются.", ["animate", "hug"]),
+    "memory": ("🕰 Старые фото", "Вернуть старым снимкам чёткость и цвет, собрать родных вместе.",
+               ["restore", "enhance", "together", "animate"]),
+    "family": ("👨‍👩‍👧 Семья и дети", "Для мам, пап и бабушек.", ["baby", "drawing", "hug", "char"]),
+    "sellers": ("🛍 Продавцам", "Видео и фото для карточек на WB, Ozon и Авито.", ["pvideo", "bg", "enhance"]),
+    "idea": ("✍️ Своя идея", "Опишите словами — нейросеть сделает картинку или видео.", ["custom", "customvid"]),
 }
-PHOTO_ASK = {
-    "pvideo": "Пришлите фото товара: целиком, на ровном фоне, без рук и лишних предметов. Лучше всего — фото с "
-              "карточки на WB или Ozon.",
-    "restore": "Пришлите старое фото. Можно просто сфотографировать бумажный снимок телефоном — ровно и без бликов.",
-    "drawing": "Пришлите фото детского рисунка — сверху, ровно, при хорошем свете.",
-    "shoot": "Пришлите фото, где хорошо видно лицо: лучше крупно, при дневном свете, без очков от солнца.",
+
+PHOTO_STEPS = ("photos", "photos2")
+TEXT_STEPS = ("name", "text", "prompt", "support")
+PICK_STEPS = {  # step -> (question, callback prefix, options: key -> label, columns)
+    "occasion": ("🎉 <b>Какой повод?</b>", "o", lambda: {k: v[0] for k, v in products.OCCASIONS.items()}, 2),
+    "character": ("🦸 <b>Кто будет поздравлять?</b>", "h", lambda: {k: v[0] for k, v in products.CHARACTERS.items()}, 2),
+    "style": ("✨ <b>Какой образ?</b>", "s", lambda: {k: v[0] for k, v in products.STYLES.items()}, 2),
+    "pscene": ("🎬 <b>Какое видео нужно?</b>", "ps", lambda: {k: v[0] for k, v in products.PRODUCT_SCENES.items()}, 1),
+    "scene": ("🛍 <b>Какой фон нужен?</b>", "b", lambda: {k: v[0] for k, v in products.BACKGROUNDS.items()}, 1),
+    "gender": ("🎅 <b>Кого поздравляет Дед Мороз?</b>", "g", lambda: {"boy": "👦 Мальчика", "girl": "👧 Девочку"}, 2),
+    "voice": ("🎙 <b>Каким голосом поздравить?</b>", "v", lambda: {k: v[0] for k, v in products.VOICES.items()}, 2),
 }
-PHOTO_FRESH_SECONDS = 15 * 60  # a photo sent this recently is used without asking again
-MENU_KEY = "📋 Меню"
+PREFIX_STEP = {prefix: step for step, (_, prefix, _, _) in PICK_STEPS.items()}
+PHOTO_FRESH_SECONDS = 15 * 60  # photos sent before choosing a service are used if this fresh
+MENU_KEY = "🏠 Меню"
 POLL_SECONDS = 10
 
+WELCOME = (
+    "👋 <b>Привет! Я «Оживи фото».</b>\n\n"
+    "Делаю из обычных фото то, что хочется переслать близким:\n"
+    "🎥 видео-поздравления с голосом и именем\n"
+    "📸 фотосессии и новые образы\n"
+    "🎬 живые фото — люди на снимке двигаются\n"
+    "🕰 реставрацию старых семейных фото\n\n"
+    "Как это работает: выберите, что сделать → пришлите фото → оплатите → через 1–5 минут результат придёт сюда.\n"
+    "Оплата по СБП или картой, без подписок.{free}"
+)
 HELP = (
-    "<b>Как это работает</b>\n\n"
-    "1. Выберите в меню, что сделать.\n"
-    "2. Бот спросит всё нужное: повод, фото, имя.\n"
-    "3. Оплатите по СБП или картой — без подписок, один раз за заказ.\n"
-    "4. Через 1–5 минут результат придёт сюда.\n\n"
-    "Можно и наоборот: просто пришлите фото, и бот предложит, что с ним сделать.\n\n"
-    "Не получилось — бот повторит бесплатно. Вопросы — кнопка «Написать в поддержку».\n"
+    "💬 <b>Помощь</b>\n\n"
+    "<b>Как заказать</b>\n"
+    "1. Нажмите «🏠 Меню» и выберите, что сделать.\n"
+    "2. Бот задаст пару вопросов и попросит фото.\n"
+    "3. Проверьте заказ и оплатите по СБП или картой.\n"
+    "4. Через 1–5 минут результат придёт в этот чат.\n\n"
+    "<b>Какие фото подходят</b>\n"
+    "Лицо крупно, хороший свет, без тёмных очков. Несколько фото с разных сторон — лучше одного: лицо "
+    "получится точнее. Можно отправить сразу альбомом.\n\n"
+    "<b>Если не получилось</b> — бот сам предложит повторить бесплатно. Остались вопросы — напишите в поддержку.\n\n"
     "Условия: /terms"
 )
-
 TERMS = (
-    "<b>Условия</b>\n\n"
-    "Бот делает из ваших фото открытки, образы, фотосессии, реставрацию и видео-поздравления с помощью "
-    "нейросетей. Оплата — один раз за каждый заказ, через платёжный сервис Platega (СБП или карта). Подписок и "
-    "автосписаний нет.\n\n"
+    "📄 <b>Условия</b>\n\n"
+    "Бот делает из ваших фото открытки, образы, фотосессии, реставрацию и видео с помощью нейросетей. Оплата — "
+    "один раз за каждый заказ, через платёжный сервис Platega (СБП или карта). Подписок и автосписаний нет.\n\n"
     "Присылайте только свои фото или фото людей, которые согласны на обработку. Нельзя: чужие фото без "
     "согласия, обнажёнку, насилие, фото и тексты для обмана людей.\n\n"
     "Если нейросеть не справилась, бот предложит повторить бесплатно. Если и так не вышло — напишите в "
     "поддержку, вернём деньги.\n\n"
-    "Фото мы не храним: оно нужно только на время создания результата."
+    "Фото мы не храним: они нужны только на время работы."
 )
 
 
@@ -143,8 +211,9 @@ def _grid(buttons: list[tuple[str, str]], per_row: int = 2) -> list[list[tuple[s
 
 
 class State:
-    """users: {id: {"free_card", "credits": {service: n}, "photo", "photo_at", "draft", "await", "ref"}},
-    orders: {id: {"user", "chat", "product", "draft", "photo", "status", "amount", "created", "result"}}."""
+    """users: {id: {"free_card", "credits", "loose": [file ids], "loose_at", "draft", "await", "ref", "screen"}},
+    orders: {id: {"user", "chat", "product", "draft", "photos", "photos2", "status", "amount", "created",
+    "kind", "result"}}."""
 
     def __init__(self, path: Path):
         self.path = path
@@ -165,7 +234,7 @@ class State:
 
     def user(self, uid: int | str) -> dict:
         with self.lock:
-            return self.data["users"].setdefault(str(uid), {"free_card": True, "credits": {}, "photo": ""})
+            return self.data["users"].setdefault(str(uid), {"free_card": True, "credits": {}})
 
     @property
     def orders(self) -> dict[str, dict]:
@@ -173,12 +242,41 @@ class State:
 
 
 class Bot:
+    ack_delay = 1.5  # photos of one album arrive as separate messages: answer once, after the burst
+
     def __init__(self, api: Api, state: State, username: str):
         self.api = api
         self.state = state
         self.username = username
         self.link = f"t.me/{username}"
         self.pool = ThreadPoolExecutor(max_workers=bot_settings.workers)
+        self._acks: dict[str, threading.Timer] = {}
+
+    # ---- helpers ----
+
+    def price(self, key: str) -> int:
+        return bot_settings.price(key)
+
+    def price_label(self, uid: int, key: str) -> str:
+        if key == "card" and self.state.user(uid).get("free_card"):
+            return "бесплатно"
+        return f"{self.price(key)} ₽"
+
+    def show(self, chat: int, mid: int | None, text: str, rows: list | None = None) -> None:
+        """Navigation edits the message the button was pressed on; otherwise a new message."""
+        if mid:
+            try:
+                self.api.edit(chat, mid, text, rows)
+                return
+            except Exception:  # noqa: BLE001 - fall back to a new message
+                pass
+        self.api.send(chat, text, rows)
+
+    def is_admin(self, uid: int | str) -> bool:
+        return bool(bot_settings.admin_id) and str(uid) == bot_settings.admin_id
+
+    def visible(self, key: str) -> bool:
+        return key != "moroz" or bot_settings.moroz_open
 
     # ---- incoming updates ----
 
@@ -202,40 +300,22 @@ class Bot:
             return
         user = self.state.user(uid)
         if file_id:
-            draft = user.get("draft") or {}
-            product = draft.get("product", "")
-            with self.state.lock:
-                user.update(photo=file_id, photo_at=time.time())
-                waiting = user.get("await")
-                if waiting in ("photo", "photo2"):
-                    draft[waiting] = file_id
-                    user.pop("await")
-                elif draft and "photo" in STEPS[product] and "photo" not in draft and product not in TWO_PHOTOS:
-                    draft["photo"] = file_id  # sent ahead of time, e.g. while the bot waits for a name
-                    self.state.save()
-                    self.api.send(chat, "Фото получил 👍 Теперь ответьте, пожалуйста, на вопрос выше.")
-                    return
-                self.state.save()
-            if draft and waiting in ("photo", "photo2"):
-                self.next_step(chat, who)
-            else:
-                self.main_menu(chat, "Фото получил 👍 Что с ним сделать?")
-        elif text in (MENU_KEY, "/menu"):
+            self.on_photo(chat, who, user, file_id)
+        elif text in (MENU_KEY, "/menu", "📋 Меню"):
             self.reset(user)
-            self.main_menu(chat)
+            self.main_menu(chat, None)
         elif text.startswith("/help"):
-            self.api.send(chat, HELP, [[("✉️ Написать в поддержку", "support")], [(MENU_KEY, "menu")]])
+            self.help(chat, None)
         elif text.startswith("/terms"):
             self.api.send(chat, TERMS)
         elif text.startswith("/stats") and self.is_admin(uid):
             self.api.send(chat, self.stats())
-        elif user.get("await") in ("name", "text", "support", "prompt") and text:
-            self.on_answer(chat, who, user, text)
-        elif user.get("await") in ("photo", "photo2"):
-            self.api.send(chat, "Жду фото — пришлите его как картинку. Или откройте меню, чтобы выбрать другое.",
-                          [[(MENU_KEY, "menu")]])
+        elif user.get("await") in TEXT_STEPS and text:
+            self.on_text(chat, who, user, text)
+        elif user.get("await") in PHOTO_STEPS:
+            self.api.send(chat, "📷 Жду фото — отправьте его как картинку (можно несколько сразу).")
         else:
-            self.main_menu(chat, "Выберите, что сделать 👇")
+            self.main_menu(chat, None, "Выберите, что сделать 👇")
 
     def on_start(self, chat: int, uid: int, text: str) -> None:
         new = not self.state.known(uid)
@@ -246,16 +326,13 @@ class Bot:
                 user["ref"] = arg[1:]
             self.reset(user)
             self.state.save()
-        s = bot_settings
-        free = " Первая открытка — бесплатно 🎁" if user.get("free_card") else ""
-        self.api.send(chat, "Привет! Я делаю из фото поздравления, открытки, образы и живые видео 📸✨\n\n"
-                            "Оплата по СБП или картой, без подписок. "
-                            f"Цены от {min(s.price(k) for k in SERVICES)} ₽.{free}",
-                      reply_keys=[MENU_KEY])
-        self.main_menu(chat)
+        free = "\n\n🎁 <b>Первая открытка — бесплатно.</b>" if user.get("free_card") else ""
+        self.api.send(chat, WELCOME.format(free=free), reply_keys=[MENU_KEY])
+        self.main_menu(chat, None)
 
     def on_button(self, cb: dict) -> None:
         chat, who, data = cb["message"]["chat"]["id"], cb["from"], cb.get("data", "")
+        mid = cb["message"].get("message_id")
         uid = who["id"]
         self.api.answer(cb["id"])
         user = self.state.user(uid)
@@ -263,114 +340,112 @@ class Bot:
         kind, _, value = data.partition(":")
         if data == "menu":
             self.reset(user)
-            self.main_menu(chat)
-        elif data == "sec:greet":
-            self.greetings_menu(chat, uid)
+            self.main_menu(chat, mid)
         elif kind == "sec" and value in SECTIONS:
-            self.section(chat, value)
+            self.section(chat, mid, uid, value)
+        elif kind == "svc" and value in SERVICES and self.visible(value):
+            self.service_card(chat, mid, uid, value)
+        elif kind == "go" and value in SERVICES and self.visible(value):
+            self.begin(chat, who, user, value)
         elif data == "orders":
-            self.my_orders(chat, uid)
+            self.my_orders(chat, mid, uid)
         elif kind == "re" and self.state.orders.get(value, {}).get("user") == uid:
             order = self.state.orders[value]
             self.api.resend(chat, order.get("kind", "photo"), order["result"])
         elif data == "help":
-            self.api.send(chat, HELP, [[("✉️ Написать в поддержку", "support")], [(MENU_KEY, "menu")]])
+            self.help(chat, mid)
         elif data == "ref":
-            self.referral(chat, uid)
+            self.referral(chat, mid, uid)
         elif data == "support":
             with self.state.lock:
                 user["await"] = "support"
-            self.api.send(chat, "Напишите вопрос одним сообщением — передам владельцу бота.")
+            self.api.send(chat, "✉️ Напишите вопрос одним сообщением — передам владельцу бота.")
         elif kind == "chk":
             self.check_now(chat, value)
-        elif kind == "p" and value in SERVICES and (value != "moroz" or bot_settings.moroz_open):
-            with self.state.lock:
-                user["draft"] = {"product": value}
-                user.pop("await", None)
-            self.next_step(chat, who)
         elif kind == "up" and self.state.orders.get(value, {}).get("kind") == "photo":
             with self.state.lock:
-                user["draft"] = {"product": "animate", "photo": self.state.orders[value]["result"]}
-            self.next_step(chat, who)
+                user["draft"] = {"product": "animate", "photos": [self.state.orders[value]["result"]]}
+                user.pop("await", None)
+            self.summary(chat, None, user)
         elif not draft:
-            self.main_menu(chat, "Выберите, что сделать 👇")
-        elif kind == "o" and value in products.OCCASIONS:
-            self.answer(chat, who, user, "occasion", value)
-        elif kind == "h" and value in products.CHARACTERS:
-            self.answer(chat, who, user, "character", value)
-        elif kind == "s" and value in products.STYLES:
-            self.answer(chat, who, user, "style", value)
-        elif kind == "ps" and value in products.PRODUCT_SCENES:
-            self.answer(chat, who, user, "pscene", value)
-        elif kind == "b" and value in products.BACKGROUNDS:
-            self.answer(chat, who, user, "scene", value)
-        elif kind == "m" and value in ("boy", "girl"):
-            self.answer(chat, who, user, "gender", value)
+            self.main_menu(chat, mid, "Выберите, что сделать 👇")
+        elif data == "pay":
+            self.order(chat, who, user)
+        elif data == "cancel":
+            self.reset(user)
+            self.main_menu(chat, mid, "Заказ отменён. Что сделаем? 👇")
+        elif data == "edit":
+            with self.state.lock:
+                user["draft"] = {"product": draft["product"]}
+            self.next_step(chat, who, user, mid)
+        elif data == "done":
+            self.photos_done(chat, who, user, mid)
+        elif data == "redo":
+            step = user.get("await")
+            if step in PHOTO_STEPS:
+                with self.state.lock:
+                    draft[step] = []
+                self.show(chat, mid, "Хорошо, пришлите фото заново 📷")
+        elif data == "nophoto" and SERVICES[draft["product"]].min_refs == 0:
+            self.answer(chat, who, user, "photos", [], mid)
         elif kind == "v" and value == "demo":
             self.voice_demo(chat)
-        elif kind == "v" and value in products.VOICES:
-            self.answer(chat, who, user, "voice", value)
-        elif data == "nophoto" and draft.get("product") in OPTIONAL_PHOTO:
-            self.answer(chat, who, user, "photo", "")
+        elif kind in PREFIX_STEP:
+            step = PREFIX_STEP[kind]
+            if value in PICK_STEPS[step][2]():
+                self.answer(chat, who, user, step, value, mid)
         elif data == "t:ready":
-            self.answer(chat, who, user, "text", "")
+            self.answer(chat, who, user, "text", "", mid)
         elif data == "t:own":
             with self.state.lock:
                 user["await"] = "text"
-            self.api.send(chat, f"Напишите своё поздравление одним сообщением, до {products.MAX_OWN_TEXT} "
-                                "символов. Имя в начале добавлять не нужно — оно будет на экране.")
+            self.show(chat, mid, f"✍️ Напишите своё поздравление одним сообщением, до {products.MAX_OWN_TEXT} "
+                                 "символов.\n\nИмя в начале писать не нужно — оно будет на экране.")
 
-    # ---- menus ----
+    # ---- screens ----
 
-    def main_menu(self, chat: int, text: str = "Что сделаем? 👇") -> None:
-        s = bot_settings
-        rows = [
-            [("🎁 Поздравления", "sec:greet")],
-            [(f"🎬 Оживить фото · {s.price_animate} ₽", "p:animate")],
-            *[[(title, f"sec:{key}")] for key, (title, _, _) in SECTIONS.items()],
-            [("✍️ Свой запрос: картинка или видео", "sec:custom")],
-            [("📂 Мои заказы", "orders"), ("👥 Пригласить друга", "ref")],
-            [("❓ Помощь", "help")],
+    def main_menu(self, chat: int, mid: int | None, text: str = "") -> None:
+        buttons = [(title, f"sec:{key}") for key, (title, _, _) in SECTIONS.items()]
+        rows = _grid(buttons[:6]) + [[buttons[6]]] + [
+            [("📂 Мои работы", "orders"), ("🎁 Подарок другу", "ref")],
+            [("💬 Помощь", "help")],
         ]
-        self.api.send(chat, text, rows)
+        self.show(chat, mid, text or "🏠 <b>Что сделаем?</b>\n\nВыберите раздел 👇", rows)
 
-    def section(self, chat: int, key: str) -> None:
-        title, text, services = SECTIONS[key]
-        rows = [[(f"{SERVICES[k][0]} · {bot_settings.price(k)} ₽", f"p:{k}")] for k in services]
-        self.api.send(chat, f"<b>{title}</b>\n\n{text}", rows + [[("⬅️ Назад", "menu")]])
+    def section(self, chat: int, mid: int | None, uid: int, key: str) -> None:
+        title, headline, keys = SECTIONS[key]
+        rows = [[(f"{SERVICES[k].title} · {self.price_label(uid, k)}", f"svc:{k}")] for k in keys if self.visible(k)]
+        self.show(chat, mid, f"<b>{title}</b>\n\n{headline}", rows + [[("⬅️ Назад", "menu")]])
 
-    def my_orders(self, chat: int, uid: int) -> None:
+    def service_card(self, chat: int, mid: int | None, uid: int, key: str) -> None:
+        s = SERVICES[key]
+        needs = ("📷 Фото не нужно" if not any(st in PHOTO_STEPS for st in s.steps)
+                 else "📷 Фото по желанию" if s.min_refs == 0
+                 else "📷 Понадобится фото" if s.max_refs == 1 else "📷 Понадобятся фото (лучше несколько)")
+        back = next((sec for sec, (_, _, keys) in SECTIONS.items() if key in keys), "")
+        text = (f"<b>{s.title}</b>\n\n{s.about}\n\n"
+                f"{needs}\n⏱ Готово за {s.wait}\n💳 Цена: <b>{self.price_label(uid, key)}</b>")
+        self.show(chat, mid, text, [[("▶️ Начать", f"go:{key}")], [("⬅️ Назад", f"sec:{back}" if back else "menu")]])
+
+    def help(self, chat: int, mid: int | None) -> None:
+        self.show(chat, mid, HELP, [[("✉️ Написать в поддержку", "support")], [("⬅️ Меню", "menu")]])
+
+    def my_orders(self, chat: int, mid: int | None, uid: int) -> None:
         done = [(oid, o) for oid, o in self.state.orders.items()
                 if o.get("user") == uid and o["status"] == "done" and o.get("result")][-8:]
         if not done:
-            self.api.send(chat, "Готовых заказов пока нет.", [[(MENU_KEY, "menu")]])
+            self.show(chat, mid, "📂 Здесь появятся ваши готовые работы.", [[("⬅️ Меню", "menu")]])
             return
-        rows = [[(f"{SERVICES[o['product']][0]} · {time.strftime('%d.%m', time.localtime(o['created']))}",
+        rows = [[(f"{SERVICES[o['product']].title} · {time.strftime('%d.%m', time.localtime(o['created']))}",
                   f"re:{oid}")] for oid, o in reversed(done)]
-        self.api.send(chat, "📂 Ваши последние заказы — нажмите, чтобы получить ещё раз:", rows + [[(MENU_KEY, "menu")]])
+        self.show(chat, mid, "📂 <b>Мои работы</b>\n\nНажмите, чтобы получить ещё раз:", rows + [[("⬅️ Меню", "menu")]])
 
-    def greetings_menu(self, chat: int, uid: int) -> None:
-        s = bot_settings
-        card = "бесплатно" if self.state.user(uid).get("free_card") else f"{s.price_card} ₽"
-        rows = [
-            [(f"🎥 Видео с вашим фото · {s.price_greet} ₽", "p:greet")],
-            [(f"🦸 Видео от персонажа, без фото · {s.price_char} ₽", "p:char")],
-            [(f"💌 Открытка с вашим фото · {card}", "p:card")],
-        ]
-        if bot_settings.moroz_open:
-            rows.append([(f"🎅 Видео от Деда Мороза · {s.price_moroz} ₽", "p:moroz")])
-        rows.append([("⬅️ Назад", "menu")])
-        self.api.send(chat, "🎁 <b>Поздравления</b> — на день рождения, свадьбу, юбилей, Новый год, 8 Марта, "
-                            "23 Февраля и любой другой повод.\n\n"
-                            "🎥 Ваше фото оживает на празднике, голос поздравляет по имени, имя на экране.\n"
-                            "🦸 Дракончик, фея, супергерой или пират поздравляют по имени — фото не нужно.\n"
-                            "💌 Вы на праздничной открытке с надписью.", rows)
-
-    def referral(self, chat: int, uid: int) -> None:
+    def referral(self, chat: int, mid: int | None, uid: int) -> None:
         link = f"https://t.me/{self.username}?start=r{uid}"
-        self.api.send(chat, "👥 <b>Пригласите друга</b>\n\nОтправьте ему эту ссылку. Друг получит бесплатную "
-                            "открытку, а когда он сделает первый заказ — бесплатная открытка придёт и вам.\n\n"
-                            f"{link}", [[("📤 Поделиться", f"https://t.me/share/url?url={link}")], [(MENU_KEY, "menu")]])
+        self.show(chat, mid, "🎁 <b>Подарите другу открытку</b>\n\nОтправьте ему ссылку — первая открытка у друга "
+                             "будет бесплатной. А когда он сделает первый заказ, бесплатная открытка придёт и вам.\n\n"
+                             f"{link}",
+                  [[("📤 Отправить другу", f"https://t.me/share/url?url={link}")], [("⬅️ Меню", "menu")]])
 
     # ---- the steps of a service ----
 
@@ -379,87 +454,142 @@ class Bot:
             user.pop("draft", None)
             user.pop("await", None)
 
-    def answer(self, chat: int, who: dict, user: dict, step: str, value: str) -> None:
+    def begin(self, chat: int, who: dict, user: dict, key: str) -> None:
+        with self.state.lock:
+            user["draft"] = {"product": key}
+            user.pop("await", None)
+            loose, fresh = user.get("loose") or [], time.time() - user.get("loose_at", 0) < PHOTO_FRESH_SECONDS
+            s = SERVICES[key]
+            if loose and fresh and "photos" in s.steps and "photos2" not in s.steps:
+                user["draft"]["photos"] = loose[:s.max_refs]  # photos sent before choosing the service
+            user.pop("loose", None)
+        self.next_step(chat, who, user, None)
+
+    def answer(self, chat: int, who: dict, user: dict, step: str, value, mid: int | None = None) -> None:
         with self.state.lock:
             user["draft"][step] = value
             user.pop("await", None)
             self.state.save()
-        self.next_step(chat, who)
+        self.next_step(chat, who, user, mid)
 
-    def next_step(self, chat: int, who: dict) -> None:
-        user = self.state.user(who["id"])
+    def next_step(self, chat: int, who: dict, user: dict, mid: int | None) -> None:
         draft = user["draft"]
-        product = draft["product"]
-        for step in STEPS[product]:
-            if step in draft:
+        s = SERVICES[draft["product"]]
+        for step in s.steps:
+            if step in draft and not (step in PHOTO_STEPS and len(draft[step]) < s.min_refs):
                 continue
-            if (step == "photo" and product not in TWO_PHOTOS and user.get("photo")
-                    and time.time() - user.get("photo_at", 0) < PHOTO_FRESH_SECONDS):
-                draft["photo"] = user["photo"]
-                continue
-            self.ask(chat, user, product, step)
+            self.ask(chat, user, step, mid)
             return
+        self.summary(chat, mid, user)
+
+    def ask(self, chat: int, user: dict, step: str, mid: int | None) -> None:
+        draft = user["draft"]
+        s = SERVICES[draft["product"]]
         with self.state.lock:
-            user.pop("draft", None)
+            user["await"] = step
+            if step in PHOTO_STEPS:
+                draft.setdefault(step, [])
             self.state.save()
-        self.order(chat, who, product, draft)
-
-    def ask(self, chat: int, user: dict, product: str, step: str) -> None:
-        if step in ("photo", "photo2", "name", "prompt"):
-            with self.state.lock:
-                user["await"] = step
-                self.state.save()
-        back = [("⬅️ Меню", "menu")]
-        if step == "occasion":
-            buttons = [(label, f"o:{key}") for key, (label, _, _) in products.OCCASIONS.items()]
-            self.api.send(chat, "Какой повод?", _grid(buttons) + [back])
-        elif step == "character":
-            buttons = [(label, f"h:{key}") for key, (label, _, _) in products.CHARACTERS.items()]
-            self.api.send(chat, "Кто будет поздравлять?", _grid(buttons) + [back])
-        elif step == "style":
-            buttons = [(label, f"s:{key}") for key, (label, _) in products.STYLES.items()]
-            self.api.send(chat, "Какой образ?", _grid(buttons) + [back])
-        elif step == "pscene":
-            buttons = [(label, f"ps:{key}") for key, (label, _, _) in products.PRODUCT_SCENES.items()]
-            self.api.send(chat, "Какое видео нужно для карточки?", [[b] for b in buttons] + [back])
-        elif step == "scene":
-            buttons = [(label, f"b:{key}") for key, (label, _) in products.BACKGROUNDS.items()]
-            self.api.send(chat, "Какой фон нужен?", [[b] for b in buttons] + [back])
-        elif step == "gender":
-            self.api.send(chat, "Кого поздравляет Дед Мороз?", [[("👦 Мальчика", "m:boy"), ("👧 Девочку", "m:girl")]])
-        elif step == "prompt":
-            self.api.send(chat, PROMPT_TIPS, [back])
-        elif step == "photo" and product in OPTIONAL_PHOTO:
-            self.api.send(chat, "Пришлите фото, если запрос про него. Если фото не нужно — нажмите кнопку.",
-                          [[("🚫 Без фото", "nophoto")], back])
-        elif step in ("photo", "photo2") and product in PHOTO2_ASK:
-            self.api.send(chat, PHOTO2_ASK[product][step == "photo2"], [back])
-        elif step == "photo":
-            self.api.send(chat, PHOTO_ASK.get(product, "Пришлите фото, где хорошо видно лицо."), [back])
+        cancel = [("✖️ Отменить", "cancel")]
+        if step in PICK_STEPS:
+            question, prefix, options, cols = PICK_STEPS[step]
+            buttons = [(label, f"{prefix}:{key}") for key, label in options().items()]
+            extra = [[("🔊 Послушать голоса", "v:demo")]] if step == "voice" else []
+            self.show(chat, mid, question, _grid(buttons, cols) + extra + [cancel])
+        elif step in PHOTO_STEPS:
+            text = s.ask if step == "photos" else s.ask2
+            rows = [[("🚫 Без фото", "nophoto")]] if s.min_refs == 0 else []
+            self.show(chat, mid, f"📷 {text}\n\n<i>Когда пришлёте все фото — нажмите «Дальше».</i>", rows + [cancel])
         elif step == "name":
-            self.api.send(chat, "Как зовут того, кого поздравляем? Напишите имя, например: Маша")
-        elif step == "voice":
-            self.api.send(chat, "Каким голосом поздравить?", self.voice_buttons())
+            self.show(chat, mid, "✏️ <b>Как зовут того, кого поздравляем?</b>\n\nНапишите имя, например: Маша",
+                      [cancel])
+        elif step == "prompt":
+            self.show(chat, mid, "✍️ <b>Опишите, что хотите получить.</b> Чем подробнее — тем лучше.\n\n"
+                                 "Например:\n• «Сделай меня рыцарем в доспехах на фоне замка»\n"
+                                 "• «Уютный домик в зимнем лесу, вечер, горят окна»\n"
+                                 "• «Я еду на белом коне по полю» (для видео)\n\n"
+                                 "<i>Нельзя: обнажёнку, жестокость, реальных знаменитостей, чужие бренды "
+                                 "и мультгероев.</i>", [cancel])
         elif step == "text":
-            draft = user["draft"]
             ready = products.GREETINGS[draft["occasion"]][0].format(name=draft["name"])
-            self.api.send(chat, f"Готовое поздравление:\n\n<i>{ready}</i>\n\nОставить его или написать своё?",
-                          [[("✅ Оставить", "t:ready")], [("✍️ Написать своё", "t:own")]])
+            self.show(chat, mid, f"💬 <b>Текст поздравления</b>\n\n<i>«{ready}»</i>\n\nОставить или написать своё?",
+                      [[("✅ Оставить", "t:ready"), ("✍️ Своё", "t:own")], cancel])
 
-    def on_answer(self, chat: int, who: dict, user: dict, text: str) -> None:
+    def on_photo(self, chat: int, who: dict, user: dict, file_id: str) -> None:
+        step = user.get("await")
+        with self.state.lock:
+            if step in PHOTO_STEPS:
+                s = SERVICES[user["draft"]["product"]]
+                photos = user["draft"].setdefault(step, [])
+                if len(photos) < s.max_refs:
+                    photos.append(file_id)
+            else:  # photos before a service is chosen: keep them for the service
+                if time.time() - user.get("loose_at", 0) > PHOTO_FRESH_SECONDS:
+                    user["loose"] = []
+                user.setdefault("loose", []).append(file_id)
+                user["loose"] = user["loose"][-8:]
+                user["loose_at"] = time.time()
+            self.state.save()
+        self.schedule_ack(chat, who)
+
+    def schedule_ack(self, chat: int, who: dict) -> None:
+        key = str(who["id"])
+        with self.state.lock:
+            if key in self._acks:
+                return
+            if self.ack_delay <= 0:
+                self._acks[key] = None  # type: ignore[assignment]
+            else:
+                timer = threading.Timer(self.ack_delay, self.ack_photos, args=(chat, who))
+                self._acks[key] = timer
+                timer.start()
+                return
+        self.ack_photos(chat, who)
+
+    def ack_photos(self, chat: int, who: dict) -> None:
+        with self.state.lock:
+            self._acks.pop(str(who["id"]), None)
+        user = self.state.user(who["id"])
+        step = user.get("await")
+        if step not in PHOTO_STEPS:
+            count = len(user.get("loose") or [])
+            self.main_menu(chat, None, f"📥 Получил фото: {count}. <b>Что с ними сделать?</b> 👇")
+            return
+        s = SERVICES[user["draft"]["product"]]
+        count = len(user["draft"].get(step, []))
+        if count >= s.max_refs:
+            self.photos_done(chat, who, user, None)
+            return
+        more = f"Можно добавить ещё {s.max_refs - count}" if s.max_refs > 1 else ""
+        self.api.send(chat, f"📥 Получил фото: <b>{count}</b>. {more}".strip(),
+                      [[("➡️ Дальше", "done")], [("🔄 Заново", "redo"), ("✖️ Отменить", "cancel")]])
+
+    def photos_done(self, chat: int, who: dict, user: dict, mid: int | None) -> None:
+        step = user.get("await")
+        if step not in PHOTO_STEPS:
+            return
+        s = SERVICES[user["draft"]["product"]]
+        photos = user["draft"].get(step, [])
+        need = max(1, s.min_refs)
+        if len(photos) < need:
+            self.api.send(chat, f"Нужно хотя бы {need} фото 📷")
+            return
+        self.answer(chat, who, user, step, photos, mid)
+
+    def on_text(self, chat: int, who: dict, user: dict, text: str) -> None:
         what = user["await"]
         if what == "support":
             with self.state.lock:
                 user.pop("await")
             name = f"@{who['username']}" if who.get("username") else who.get("first_name", "")
             self.notify_admin(f"✉️ Вопрос от {name} (id {who['id']}):\n\n{text[:1500]}")
-            self.api.send(chat, "Передал, вам ответят в личные сообщения. Спасибо!", [[(MENU_KEY, "menu")]])
+            self.api.send(chat, "✅ Передал. Вам ответят в личные сообщения.", [[("⬅️ Меню", "menu")]])
         elif what == "prompt":
             prompt = " ".join(text.split())[:600]
             if len(prompt) < 5:
-                self.api.send(chat, "Опишите чуть подробнее, что хотите получить.")
+                self.api.send(chat, "Опишите чуть подробнее, что хотите получить 🙂")
             elif not products.allowed_request(prompt):
-                self.api.send(chat, "Такое бот не делает. Опишите другой запрос.")
+                self.api.send(chat, "🚫 Такое бот не делает. Опишите другой запрос.")
             else:
                 self.answer(chat, who, user, "prompt", prompt)
         elif what == "name":
@@ -475,24 +605,52 @@ class Bot:
                 return
             self.answer(chat, who, user, "text", own)
 
-    @staticmethod
-    def voice_buttons() -> list[list[tuple[str, str]]]:
-        buttons = [(label, f"v:{key}") for key, (label, *_) in products.VOICES.items()]
-        return _grid(buttons) + [[("🔊 Послушать голоса", "v:demo")]]
+    def summary(self, chat: int, mid: int | None, user: dict) -> None:
+        """The whole order on one screen before paying."""
+        d = user["draft"]
+        key = d["product"]
+        lines = [f"🧾 <b>Проверьте заказ</b>\n", f"<b>{SERVICES[key].title}</b>"]
+        labels = {
+            "occasion": ("🎉 Повод", lambda v: products.OCCASIONS[v][0]),
+            "character": ("🦸 Персонаж", lambda v: products.CHARACTERS[v][0]),
+            "style": ("✨ Образ", lambda v: products.STYLES[v][0]),
+            "pscene": ("🎬 Видео", lambda v: products.PRODUCT_SCENES[v][0]),
+            "scene": ("🛍 Фон", lambda v: products.BACKGROUNDS[v][0]),
+            "gender": ("👶 Кого", lambda v: {"boy": "мальчика", "girl": "девочку"}[v]),
+            "name": ("✏️ Имя", str),
+            "voice": ("🎙 Голос", lambda v: products.VOICES[v][0]),
+        }
+        for step, (label, fmt) in labels.items():
+            if d.get(step):
+                lines.append(f"{label}: {fmt(d[step])}")
+        if "text" in d:
+            lines.append("💬 Текст: " + (f"«{d['text']}»" if d["text"] else "готовый"))
+        if d.get("prompt"):
+            lines.append(f"✍️ Запрос: «{d['prompt']}»")
+        for step in PHOTO_STEPS:
+            if step in d:
+                lines.append(f"📷 Фото: {len(d[step])}" if d[step] else "📷 Без фото")
+        uid = int(next(k for k, v in self.state.data["users"].items() if v is user))
+        free = self.is_admin(uid) or (key == "card" and user.get("free_card")) or user["credits"].get(key, 0) > 0
+        price = "бесплатно 🎁" if free else f"{self.price(key)} ₽"
+        lines.append(f"\n⏱ Готово за {SERVICES[key].wait}\n💳 Итого: <b>{price}</b>")
+        with self.state.lock:
+            user["await"] = "confirm"
+        pay = "✅ Сделать бесплатно" if free else f"💳 Перейти к оплате · {self.price(key)} ₽"
+        self.show(chat, mid, "\n".join(lines), [[(pay, "pay")], [("✏️ Изменить", "edit"), ("✖️ Отменить", "cancel")]])
 
     def voice_demo(self, chat: int) -> None:
-        self.api.send(chat, "Сейчас пришлю примеры, пару секунд…")
+        self.api.send(chat, "🔊 Сейчас пришлю примеры голосов…")
         for key, (label, *_) in products.VOICES.items():
             try:
                 self.api.audio(chat, products.voice_sample(key, bot_settings.root / "voices"), label)
             except Exception:  # noqa: BLE001
                 log.warning("voice sample %s failed", key, exc_info=True)
-        self.api.send(chat, "Каким голосом поздравить?", self.voice_buttons())
+        question, prefix, options, cols = PICK_STEPS["voice"]
+        buttons = [(label, f"{prefix}:{key}") for key, label in options().items()]
+        self.api.send(chat, question, _grid(buttons, cols) + [[("✖️ Отменить", "cancel")]])
 
     # ---- admin ----
-
-    def is_admin(self, uid: int | str) -> bool:
-        return bool(bot_settings.admin_id) and str(uid) == bot_settings.admin_id
 
     def stats(self) -> str:
         orders = list(self.state.orders.values())
@@ -500,7 +658,7 @@ class Bot:
         by_service: dict[str, int] = {}
         for o in paid:
             by_service[o["product"]] = by_service.get(o["product"], 0) + 1
-        lines = "\n".join(f"  {SERVICES[k][0]}: {n}" for k, n in sorted(by_service.items(), key=lambda x: -x[1]))
+        lines = "\n".join(f"  {SERVICES[k].title}: {n}" for k, n in sorted(by_service.items(), key=lambda x: -x[1]))
         return (f"Пользователей: {len(self.state.data['users'])}\n"
                 f"Заказов: {len(orders)}, оплачено: {len(paid)}\n"
                 f"Выручка: {sum(o['amount'] for o in paid)} ₽\n"
@@ -516,12 +674,14 @@ class Bot:
 
     # ---- orders ----
 
-    def order(self, chat: int, who: dict, product: str, draft: dict) -> None:
+    def order(self, chat: int, who: dict, user: dict) -> None:
         uid = who["id"]
         with self.state.lock:
-            user = self.state.user(uid)
-            order = {"user": uid, "chat": chat, "product": product, "draft": draft, "photo": draft.get("photo", ""),
-                     "photo2": draft.get("photo2", ""),
+            draft = user.pop("draft")
+            user.pop("await", None)
+            product = draft["product"]
+            order = {"user": uid, "chat": chat, "product": product, "draft": draft,
+                     "photos": draft.get("photos", []), "photos2": draft.get("photos2", []),
                      "status": "new", "amount": 0, "created": time.time()}
             if self.is_admin(uid):
                 order["credit"] = True  # the owner tries everything for free
@@ -538,21 +698,24 @@ class Bot:
                 self.state.save()
                 self.start(oid)
                 return
-        price = bot_settings.price(product)
-        name = SERVICES[product][0]
+        price = self.price(product)
+        title = SERVICES[product].title
         try:
-            tx = platega.create(price, f"{name} — бот {self.link}", uid, who.get("username", ""),
+            tx = platega.create(price, f"{title} — бот {self.link}", uid, who.get("username", ""),
                                 payload=product, return_url=f"https://{self.link}")
         except Exception as exc:  # noqa: BLE001 - the customer needs an answer whatever broke
             log.exception("payment link failed")
             self.notify_admin(f"⚠️ Не создалась ссылка на оплату: {exc}")
-            self.api.send(chat, "Не получилось создать оплату. Попробуйте через пару минут.", [[(MENU_KEY, "menu")]])
+            with self.state.lock:
+                user["draft"] = draft
+            self.api.send(chat, "😔 Не получилось создать оплату. Попробуйте через пару минут.",
+                          [[("🔁 Попробовать снова", "pay")], [("⬅️ Меню", "menu")]])
             return
         with self.state.lock:
             order.update(status="pending", amount=price)
             self.state.orders[tx["transactionId"]] = order
             self.state.save()
-        self.api.send(chat, f"{name} — <b>{price} ₽</b>\n\nОплатите по кнопке (СБП или карта). "
+        self.api.send(chat, f"💳 <b>{title} — {price} ₽</b>\n\nНажмите «Оплатить» и оплатите по СБП или картой. "
                             "Как только оплата пройдёт, я сам начну работу и пришлю результат сюда.",
                       [[(f"💳 Оплатить {price} ₽", tx["url"])], [("✅ Я оплатил", f"chk:{tx['transactionId']}")]])
 
@@ -563,7 +726,7 @@ class Bot:
         if order["status"] == "pending":
             self.poll_one(oid)
         if self.state.orders[oid]["status"] == "pending":
-            self.api.send(chat, "Оплата пока не пришла. Обычно это занимает до минуты — я проверю сам и начну.")
+            self.api.send(chat, "⏳ Оплата пока не пришла. Обычно это до минуты — я проверю сам и начну.")
 
     def poll_one(self, oid: str) -> None:
         try:
@@ -585,10 +748,11 @@ class Bot:
                 return
             self.state.save()
         if order["status"] == "paid":
-            self.notify_admin(f"💰 Оплата {order['amount']} ₽: {SERVICES[order['product']][0]} (user {order['user']})")
+            self.notify_admin(f"💰 Оплата {order['amount']} ₽: {SERVICES[order['product']].title} "
+                              f"(user {order['user']})")
             self.start(oid)
         elif order["status"] == "canceled":
-            self.api.send(order["chat"], "Оплата не прошла. Можно попробовать ещё раз.", [[(MENU_KEY, "menu")]])
+            self.api.send(order["chat"], "Оплата не прошла. Можно попробовать ещё раз.", [[("⬅️ Меню", "menu")]])
 
     def poll_pending(self) -> None:
         for oid in [k for k, o in list(self.state.orders.items()) if o["status"] == "pending"]:
@@ -609,45 +773,23 @@ class Bot:
             order["status"] = "running"
             self.state.save()
         chat, product = order["chat"], order["product"]
-        _, doing, wait = SERVICES[product]
-        self.api.send(chat, f"Принял, делаю {doing}. Это займёт {wait}.")
+        s = SERVICES[product]
+        self.api.send(chat, f"✨ Принял! Делаю {s.doing}.\n⏱ Обычно это {s.wait} — пришлю сюда, как будет готово.")
         workdir = Path(tempfile.mkdtemp(prefix="photobot-"))
-        cache = bot_settings.root / "cache"
         try:
-            photo = self.api.download(order["photo"]) if order["photo"] else b""
-            photo2 = self.api.download(order["photo2"]) if order.get("photo2") else b""
-            caption = f"Готово! Ещё: {self.link}"
-            d = order["draft"]
-            upsell = [[(f"🎬 Оживить это фото · {bot_settings.price_animate} ₽", f"up:{oid}")], [(MENU_KEY, "menu")]]
-            if product in PICTURES:
-                picture = {
-                    "card": lambda: products.card(photo, d["occasion"], self.link),
-                    "restore": lambda: products.restore(photo, self.link),
-                    "style": lambda: products.style(photo, d["style"], self.link),
-                    "drawing": lambda: products.drawing(photo, self.link),
-                    "enhance": lambda: products.enhance(photo, self.link),
-                    "bg": lambda: products.background(photo, d["scene"], self.link),
-                    "together": lambda: products.together(photo, photo2, self.link),
-                    "baby": lambda: products.baby(photo, photo2, self.link),
-                    "custom": lambda: products.custom_picture(photo, d["prompt"], self.link),
-                }[product]()
-                order.update(kind="photo", result=self.api.photo(chat, picture, caption, upsell))
-            elif product == "shoot":
-                order.update(kind="album", result=self.api.album(chat, products.photoshoot(photo, self.link), caption))
+            refs = [self.api.download(f) for f in order.get("photos", [])]
+            refs2 = [self.api.download(f) for f in order.get("photos2", [])]
+            kind, result = products.make(product, order["draft"], refs, refs2, workdir, self.link,
+                                         bot_settings.root / "cache")
+            caption = f"✅ Готово! {s.title}\nЕщё: {self.link}"
+            if kind == "photo":
+                upsell = [[(f"🎬 Оживить это фото · {self.price('animate')} ₽", f"up:{oid}")],
+                          [("🏠 Меню", "menu"), ("🎁 Подарок другу", "ref")]]
+                order.update(kind="photo", result=self.api.photo(chat, result, caption, upsell))
+            elif kind == "album":
+                order.update(kind="album", result=self.api.album(chat, result, caption))
             else:
-                video = {
-                    "greet": lambda: products.greeting(photo, d["occasion"], d["name"], workdir, self.link,
-                                                       d.get("voice", "f"), d.get("text", "")),
-                    "char": lambda: products.character_greeting(d["character"], d["occasion"], d["name"],
-                                                                d.get("text", ""), workdir, self.link, cache),
-                    "moroz": lambda: products.moroz(d["gender"], d["name"], workdir, self.link,
-                                                    cache / "ded-moroz.jpg"),
-                    "hug": lambda: products.hug(photo, photo2, workdir, self.link),
-                    "pvideo": lambda: products.product_video(photo, d["pscene"], workdir, self.link),
-                    "customvid": lambda: products.custom_video(photo, d["prompt"], workdir, self.link),
-                    "animate": lambda: products.animate(photo, workdir, self.link),
-                }[product]()
-                order.update(kind="video", result=self.api.video(chat, video, caption))
+                order.update(kind="video", result=self.api.video(chat, result, caption))
             status = "done"
         except Exception as exc:  # noqa: BLE001
             log.exception("order %s failed", oid)
@@ -658,15 +800,12 @@ class Bot:
                     user["free_card"] = True
                 else:
                     user["credits"][product] = user["credits"].get(product, 0) + 1
-            self.notify_admin(f"⚠️ Заказ не получился ({SERVICES[product][0]}, user {order['user']}, "
+            self.notify_admin(f"⚠️ Заказ не получился ({s.title}, user {order['user']}, "
                               f"{order['amount']} ₽): {str(exc)[:300]}")
-            if "photo" in STEPS[product]:
-                self.api.send(chat, "Не получилось: нейросеть не приняла это фото. Пришлите другое фото "
-                                    "(лицо крупно, без очень тёмного света) и выберите ту же услугу — "
-                                    "повторю бесплатно.", [[(MENU_KEY, "menu")]])
-            else:
-                self.api.send(chat, "Не получилось сделать видео. Закажите снова — повторю бесплатно.",
-                              [[(MENU_KEY, "menu")]])
+            hint = ("Попробуйте другие фото — лицо крупно, при хорошем свете. " if order.get("photos") else "")
+            self.api.send(chat, f"😔 Не получилось: нейросеть не справилась. {hint}Закажите «{s.title}» ещё раз — "
+                                "это будет <b>бесплатно</b>.", [[("🔁 Повторить", f"svc:{product}")],
+                                                                [("⬅️ Меню", "menu")]])
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
         with self.state.lock:
@@ -675,8 +814,8 @@ class Bot:
         if status == "done":
             self.reward_referrer(order["user"])
             if order.get("kind") != "photo":
-                self.api.send(chat, "Понравилось? Перешлите друзьям 🙂 Или сделайте что-нибудь ещё:",
-                              [[(MENU_KEY, "menu")], [("👥 Пригласить друга", "ref")]])
+                self.api.send(chat, "Понравилось? Перешлите близким 💛",
+                              [[("🏠 Меню", "menu"), ("🎁 Подарок другу", "ref")]])
 
     def reward_referrer(self, uid: int | str) -> None:
         """The friend's first finished order gives the one who invited them a free card."""
@@ -690,8 +829,8 @@ class Bot:
             inviter["credits"]["card"] = inviter["credits"].get("card", 0) + 1
             self.state.save()
         try:
-            self.api.send(int(ref), "🎁 Ваш друг сделал первый заказ — вам бесплатная открытка! Выберите её в "
-                                    "меню «Поздравления».", [[(MENU_KEY, "menu")]])
+            self.api.send(int(ref), "🎁 Ваш друг сделал первый заказ — вам бесплатная открытка! Она в разделе "
+                                    "«Поздравления».", [[("🏠 Меню", "menu")]])
         except Exception:  # noqa: BLE001
             log.warning("referral notice failed", exc_info=True)
 
@@ -712,9 +851,22 @@ def main() -> None:
     api = Api(bot_settings.token)
     me = api.call("getMe")
     bot = Bot(api, State(bot_settings.root / "state.json"), me["username"])
-    api.call("setMyCommands", commands=[{"command": "menu", "description": "Меню"},
-                                        {"command": "help", "description": "Как это работает"},
-                                        {"command": "terms", "description": "Условия и возврат"}])
+    api.call("setMyCommands", commands=[{"command": "menu", "description": "🏠 Меню"},
+                                        {"command": "help", "description": "💬 Как это работает"},
+                                        {"command": "terms", "description": "📄 Условия и возврат"}])
+    for method, field_name, value in (
+        ("setMyShortDescription", "short_description",
+         "Оживлю фото, сделаю видео-поздравление с именем, фотосессию и реставрацию старых снимков. "
+         "Первая открытка бесплатно."),
+        ("setMyDescription", "description",
+         "🎥 Видео-поздравления с голосом и именем\n📸 Фотосессии и новые образы из селфи\n"
+         "🎬 Живые фото — люди на снимке двигаются\n🕰 Реставрация старых фото\n🛍 Видео для карточек товаров\n\n"
+         "Оплата по СБП или картой, без подписок. Первая открытка — бесплатно 🎁"),
+    ):
+        try:
+            api.call(method, **{field_name: value})
+        except Exception:  # noqa: BLE001
+            log.warning("%s failed", method, exc_info=True)
     bot.resume()
     threading.Thread(target=_poller, args=(bot, threading.Event()), daemon=True).start()
     log.info("photo bot @%s started", me["username"])

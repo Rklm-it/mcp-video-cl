@@ -85,29 +85,43 @@ def jpeg(image: Image.Image, quality: int = 92) -> bytes:
 
 
 def edit(photo: bytes | list[bytes], prompt: str, aspect: str = "3:4") -> Image.Image:
-    """Gemini image editing: one or several photos plus an instruction, one picture back."""
+    """Image editing by the best model that answers: one or several reference photos plus an instruction.
+    Nano Banana Pro keeps faces far better than the older flash model and takes up to 14 references."""
+    from .config import bot_settings
+
     photos = photo if isinstance(photo, list) else [photo]
-    resp = net.post(
-        gemini.url(f"models/{reels_settings.gemini_image_model}:generateContent"),
-        headers=gemini.headers(),
-        json={
-            "contents": [{"parts": [
-                *({"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(shrink(p)).decode()}}
-                  for p in photos),
-                {"text": prompt},
-            ]}],
-            "generationConfig": {"responseModalities": ["IMAGE"], "imageConfig": {"aspectRatio": aspect}},
-        },
-        timeout=180,
-    )
-    if resp.status_code >= 400:
-        raise RuntimeError(f"Gemini error {resp.status_code}: {resp.text[:300]}")
-    for cand in resp.json().get("candidates", []):
-        for part in cand.get("content", {}).get("parts", []):
-            data = (part.get("inlineData") or part.get("inline_data") or {}).get("data")
-            if data:
-                return Image.open(io.BytesIO(base64.b64decode(data))).convert("RGB")
-    raise RuntimeError("Gemini returned no image (the photo may have been blocked)")
+    parts = [{"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(shrink(p, 1536)).decode()}}
+             for p in photos[:14]]
+    last = ""
+    for model in bot_settings.image_models():
+        config: dict = {"aspectRatio": aspect}
+        if "gemini-3" in model:
+            config["imageSize"] = "2K"
+        resp = net.post(
+            gemini.url(f"models/{model}:generateContent"), headers=gemini.headers(), timeout=240,
+            json={"contents": [{"parts": [*parts, {"text": prompt}]}],
+                  "generationConfig": {"responseModalities": ["IMAGE"], "imageConfig": config}},
+        )
+        if resp.status_code in (400, 404) and "model" in resp.text.lower():
+            last = f"{model}: {resp.status_code} {resp.text[:200]}"
+            continue  # this model is not available at the gateway: try the next one
+        if resp.status_code >= 400:
+            raise RuntimeError(f"Gemini error {resp.status_code}: {resp.text[:300]}")
+        for cand in resp.json().get("candidates", []):
+            for part in cand.get("content", {}).get("parts", []):
+                data = (part.get("inlineData") or part.get("inline_data") or {}).get("data")
+                if data:
+                    return Image.open(io.BytesIO(base64.b64decode(data))).convert("RGB")
+        raise RuntimeError("The image model returned no picture (the photo may have been blocked)")
+    raise RuntimeError(f"No image model answered: {last}")
+
+
+def refs_note(count: int, who: str = "the same person or people") -> str:
+    """Tell the model how to use several reference photos."""
+    if count <= 1:
+        return ""
+    return (f"The {count} reference photos all show {who} from different angles and in different light. Study "
+            "all of them and reproduce the face exactly: this is the most important requirement. ")
 
 
 def _font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -642,3 +656,83 @@ def product_video(photo: bytes, scene: str, workdir: Path, link: str) -> Path:
     frame = vertical_frame(jpeg(picture), workdir / "frame.jpg")
     raw = video_gen.animate(frame, PRODUCT_KEEP + motion, 8, workdir / "raw.mp4", context=False)
     return raw  # no bot link: sellers put the video on their own product card
+
+
+# ---- one entry point for the bot: any service from reference photos ----
+
+def make(product: str, d: dict, refs: list[bytes], refs2: list[bytes], workdir: Path, link: str,
+         cache: Path) -> tuple[str, object]:
+    """Make an order. Returns ("photo", jpeg bytes) | ("album", [jpeg bytes]) | ("video", mp4 path)."""
+    first = refs[0] if refs else b""
+    n = len(refs)
+    face = refs_note(n) + KEEP_FACE
+    if product == "card":
+        _, greeting_text, scene = OCCASIONS[d["occasion"]]
+        picture = edit(refs, face + f"Make a beautiful greeting-card photo of them in {scene}. Portrait orientation, "
+                                    "the people large and centered, calm space at the bottom for a caption.", "3:4")
+        return "photo", jpeg(sign(title(picture, greeting_text), link))
+    if product == "style":
+        return "photo", jpeg(sign(edit(refs, face + STYLES[d["style"]][1], "3:4"), link))
+    if product == "shoot":
+        return "album", [jpeg(sign(edit(refs, face + s, "3:4"), link)) for s in SHOOT_STYLES]
+    if product == "restore":
+        return "photo", restore(first, link)
+    if product == "enhance":
+        return "photo", enhance(first, link)
+    if product == "drawing":
+        return "photo", drawing(first, link)
+    if product == "bg":
+        prompt = refs_note(n, "the same item") + BACKGROUND.format(scene=BACKGROUNDS[d["scene"]][1])
+        return "photo", jpeg(sign(edit(refs, prompt, nearest_aspect(first)), link))
+    if product == "together":
+        prompt = (f"There are {n} photos, each shows a different person (or people). " + TOGETHER)
+        return "photo", jpeg(sign(edit(refs, prompt, "4:3"), link))
+    if product == "baby":
+        prompt = (f"The first {n} photos show the mother, the next {len(refs2)} photos show the father. " + BABY)
+        return "photo", jpeg(sign(edit(refs + refs2, prompt, "3:4"), link))
+    if product == "custom":
+        if refs:
+            picture = edit(refs, refs_note(n) + CUSTOM_EDIT.format(prompt=d["prompt"]), nearest_aspect(first))
+        else:
+            from ..reels import images
+
+            picture = images.picture(CUSTOM_NEW.format(prompt=d["prompt"]), "3:4")
+        return "photo", jpeg(sign(picture, link))
+
+    # videos
+    if product == "animate":
+        return "video", animate(first, workdir, link)
+    if product == "greet":
+        _, _, scene = OCCASIONS[d["occasion"]]
+        picture = edit(refs, face + f"Place them in {scene}. Vertical frame, the people large and centered.", "9:16")
+        frame = vertical_frame(jpeg(picture), workdir / "frame.jpg")
+        raw = video_gen.animate(frame, ANIMATE_PROMPT, 8, workdir / "raw.mp4", context=False)
+        return "video", _voiced(raw, d["occasion"], d["name"], d.get("text", ""), d.get("voice", "f"), workdir, link)
+    if product == "hug":
+        prompt = (f"The first {n} photos show the person now, the next {len(refs2)} photos show the same person as "
+                  "a child. " + HUG)
+        frame = vertical_frame(jpeg(edit(refs + refs2, prompt, "9:16")), workdir / "frame.jpg")
+        raw = video_gen.animate(frame, HUG_VIDEO, 8, workdir / "raw.mp4", context=False)
+        return "video", sign_video(raw, workdir / "hug.mp4", link)
+    if product == "pvideo":
+        _, place, motion = PRODUCT_SCENES[d["pscene"]]
+        prompt = refs_note(n, "the same product") + PRODUCT_KEEP + f"Place it in {place}. Vertical 9:16 product photo."
+        frame = vertical_frame(jpeg(edit(refs, prompt, "9:16")), workdir / "frame.jpg")
+        return "video", video_gen.animate(frame, PRODUCT_KEEP + motion, 8, workdir / "raw.mp4", context=False)
+    if product == "customvid":
+        if refs:
+            picture = edit(refs, refs_note(n) + CUSTOM_EDIT.format(prompt=d["prompt"]) + " Vertical 9:16 frame.",
+                           "9:16")
+        else:
+            from ..reels import images
+
+            picture = images.picture(CUSTOM_NEW.format(prompt=d["prompt"]) + " Vertical 9:16 frame.", "9:16")
+        frame = vertical_frame(jpeg(picture), workdir / "frame.jpg")
+        raw = video_gen.animate(frame, f"{SAFE}{d['prompt']}", 8, workdir / "raw.mp4", context=False)
+        return "video", sign_video(raw, workdir / "custom.mp4", link)
+    if product == "char":
+        return "video", character_greeting(d["character"], d["occasion"], d["name"], d.get("text", ""), workdir,
+                                           link, cache)
+    if product == "moroz":
+        return "video", moroz(d["gender"], d["name"], workdir, link, cache / "ded-moroz.jpg")
+    raise ValueError(f"unknown service {product}")
