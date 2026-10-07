@@ -80,6 +80,7 @@ def render(job: dict, workdir: Path, offer: dict | None, progress: Callable[[flo
     subs = workdir / "subs.ass"
     subs.write_text(build_ass(words, _font_family(reels_settings.font)))
     vf = [f"ass={subs}:fontsdir={Path(reels_settings.font).parent}"]
+    vf += _labels(scenes, [o.duration for o in outs], workdir)
     if offer:
         marker = workdir / "marker.txt"
         marker.write_text(ad_marker(offer))
@@ -228,6 +229,20 @@ def _fit_size(text: str, size: int, max_width: int = images.W - 120) -> int:
             break
         size -= 2
     return size
+
+
+def _labels(scenes: list[dict], durations: list[float], workdir: Path) -> list[str]:
+    """Big caption at the top of each scene that has a `label`."""
+    out, t = [], 0.0
+    for i, (scene, d) in enumerate(zip(scenes, durations)):
+        label = (scene.get("label") or "").strip()
+        if label:
+            path = workdir / f"label{i:02d}.txt"
+            path.write_text(label.upper())
+            out.append(_drawtext(path, size=_fit_size(label.upper(), 92), color="white", box="0x0B1030@0.78",
+                                 y="h*0.12", enable=f"between(t,{t:.2f},{t + d:.2f})"))
+        t += d
+    return out
 
 
 def offer_spans(scenes: list[dict], durations: list[float]) -> list[tuple[float, float]]:

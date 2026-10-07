@@ -182,6 +182,17 @@ async def test_animated_scene_limit(monkeypatch):
     assert res.isError and "limit is 1" in res.content[0].text
 
 
+async def test_scene_label_is_drawn_on_top():
+    res = await call("create_reel", background=False, title="x", scenes=[
+        {"text": "Это DPI.", "image_prompt": "p", "label": "DPI"}, {"text": "Дальше.", "image_prompt": "q"}])
+    assert not res.isError, res.content[0].text
+    job_id = res.content[0].text.split()[1]
+    workdir = jobs.job_dir(job_id)
+    assert (workdir / "label00.txt").read_text() == "DPI"
+    assert not (workdir / "label01.txt").exists()
+    assert (workdir / "reel.mp4").exists()
+
+
 async def test_setting_none_skips_scene_context(monkeypatch):
     from video_mcp.reels import images
 
