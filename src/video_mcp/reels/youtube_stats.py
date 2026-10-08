@@ -21,7 +21,8 @@ SOURCES = {
     "SHORTS": "лента Shorts", "YT_SEARCH": "поиск YouTube", "YT_CHANNEL": "страница канала",
     "SUBSCRIBER": "подписки", "YT_OTHER_PAGE": "другие страницы YouTube", "RELATED_VIDEO": "похожие видео",
     "EXT_URL": "внешние сайты", "NO_LINK_OTHER": "прямые заходы", "PLAYLIST": "плейлисты",
-    "NOTIFICATION": "уведомления", "BROWSE": "главная и рекомендации",
+    "NOTIFICATION": "уведомления", "BROWSE": "главная и рекомендации", "SOUND_PAGE": "страница звука",
+    "HASHTAGS": "хештеги", "END_SCREEN": "конечная заставка", "ANNOTATION": "подсказки",
 }
 
 
