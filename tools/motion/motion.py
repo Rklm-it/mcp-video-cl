@@ -99,6 +99,8 @@ class Canvas:
         self.put(lay, a)
 
     def title(self, line1: str, line2: str, t: float, t0: float = 0.1, size: int = 78) -> None:
+        while size > 40 and max(font("Unbounded", size, "Black").getlength(s) for s in (line1, line2)) > W - 120:
+            size -= 2  # shrink a long line to fit the 60 px margins
         f = font("Unbounded", size, "Black")
         for i, (text, color) in enumerate(((line1, WHITE), (line2, YELLOW))):
             if not text:
@@ -184,6 +186,31 @@ class Canvas:
         start = (t * 360) % 360
         d.arc((cx - r, cy - r, cx + r, cy + r), start, start + 270, fill=color, width=8)
         self.put(lay)
+
+    def person(self, center, t, t0, color=CYAN, r=26) -> None:
+        """Small user icon (head + shoulders) that pops in."""
+        p = prog(t, t0, 0.3)
+        if p <= 0:
+            return
+        cx, cy = center
+        lay, d = self.layer()
+        d.ellipse((cx - r, cy - 2 * r, cx + r, cy), fill=color)
+        d.pieslice((cx - 1.8 * r, cy + 6, cx + 1.8 * r, cy + 3.4 * r), 180, 360, fill=color)
+        self.put(lay, p)
+
+    def bubble(self, xy, text, t, t0, fill=(40, 70, 140), color=WHITE, size=36) -> None:
+        """Chat message sliding in from the left."""
+        p = prog(t, t0, 0.3)
+        if p <= 0:
+            return
+        f = font("Manrope", size, "Bold")
+        x, y = xy
+        lay, d = self.layer()
+        w = d.textlength(text, font=f) + 56
+        x -= (1 - p) * 60
+        d.rounded_rectangle((x, y, x + w, y + size + 34), radius=26, fill=fill)
+        d.text((x + 28, y + 15), text, font=f, fill=color)
+        self.put(lay, p)
 
     def phone(self, box, operator, t, t0, state: str, mark_t: float) -> None:
         """Phone mockup: operator in the status bar, chat bubbles; state ok/fail decides the ending."""
