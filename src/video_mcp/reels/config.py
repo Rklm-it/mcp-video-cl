@@ -31,7 +31,8 @@ class ReelsSettings:
     openai_tts_voice: str = field(default_factory=lambda: _env("REELS_OPENAI_TTS_VOICE", "onyx"))
     openai_tts_instructions: str = field(default_factory=lambda: _env(
         "REELS_OPENAI_TTS_INSTRUCTIONS",
-        "Говори по-русски живо и уверенно, как ведущий коротких роликов, в бодром темпе."))
+        ("Говори по-русски естественно, как молодой блогер рассказывает другу интересную вещь: живые интонации, "
+         "лёгкая улыбка в голосе, короткие паузы перед главным словом, бодрый темп, без дикторского пафоса.")))
     elevenlabs_key: str = field(default_factory=lambda: _env("REELS_ELEVENLABS_API_KEY"))
     elevenlabs_voice: str = field(default_factory=lambda: _env("REELS_ELEVENLABS_VOICE_ID"))
     elevenlabs_model: str = field(default_factory=lambda: _env("REELS_ELEVENLABS_MODEL", "eleven_multilingual_v2"))

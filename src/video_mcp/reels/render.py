@@ -312,7 +312,38 @@ Style: Main,{font_family},82,&H00FFFFFF,&H00FFFFFF,&H00000000,&H96000000,-1,0,0,
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     lines = []
-    for text, start, end in chunk_words(words):
-        clean = text.replace("{", "(").replace("}", ")").replace("\n", " ").upper()
-        lines.append(f"Dialogue: 0,{_ass_time(start)},{_ass_time(end)},Main,,0,0,0,,{clean}")
+    for (_, start, end), group in zip(chunk_words(words), _word_groups(words)):
+        # karaoke: the line stays, the word being spoken pops in the accent colour
+        for i, w in enumerate(group):
+            t0 = start if i == 0 else w.start
+            t1 = end if i + 1 == len(group) else group[i + 1].start
+            if t1 <= t0:
+                continue
+            parts = [_ass_clean(x.text) for x in group]
+            parts[i] = HIGHLIGHT + parts[i] + "{\\r}"
+            lines.append(f"Dialogue: 0,{_ass_time(t0)},{_ass_time(t1)},Main,,0,0,0,,{' '.join(parts)}")
     return header + "\n".join(lines) + "\n"
+
+
+HIGHLIGHT = "{\\c&H005ADCFF&\\fscx108\\fscy108}"  # warm yellow (ASS colours are BGR), slightly bigger
+
+
+def _ass_clean(text: str) -> str:
+    return text.replace("{", "(").replace("}", ")").replace("\n", " ").upper()
+
+
+def _word_groups(words: list[tts.Word], max_words: int = 3, max_chars: int = 18) -> list[list[tts.Word]]:
+    """The same grouping as chunk_words, but keeping the words (for per-word highlighting)."""
+    groups: list[list[tts.Word]] = []
+    cur: list[tts.Word] = []
+    for w in words:
+        if cur and (len(cur) >= max_words or len(" ".join(x.text for x in cur + [w])) > max_chars):
+            groups.append(cur)
+            cur = []
+        cur.append(w)
+        if re.search(r"[.,!?;:…—]$", w.text):
+            groups.append(cur)
+            cur = []
+    if cur:
+        groups.append(cur)
+    return groups

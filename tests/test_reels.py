@@ -55,7 +55,9 @@ def test_subtitle_chunks_break_on_punctuation_and_length():
     assert chunks[0] == "Кофе каждый день,"
     assert all(len(c.split()) <= 3 for c in chunks)
     ass = render.build_ass(words, "DejaVu Sans")
-    assert "Dialogue: 0,0:00:00.00" in ass and "КОФЕ КАЖДЫЙ ДЕНЬ," in ass
+    assert "Dialogue: 0,0:00:00.00" in ass
+    assert render.HIGHLIGHT + "КОФЕ{\\r} КАЖДЫЙ ДЕНЬ," in ass  # the spoken word is highlighted
+    assert "КОФЕ " + render.HIGHLIGHT + "КАЖДЫЙ{\\r} ДЕНЬ," in ass
 
 
 def test_offer_spans():
