@@ -647,3 +647,23 @@ def test_youtube_upload_can_be_switched_off(monkeypatch):
     assert "youtube" in reels_settings.publish_targets()
     monkeypatch.setattr(reels_settings, "yt_upload", False)
     assert "youtube" not in reels_settings.publish_targets()
+
+
+async def test_media_start_skips_the_beginning_and_links_keep_case(video_dir):
+    from PIL import Image
+
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                    "-f", "lavfi", "-i", "color=c=red:s=720x1280:d=2:r=24",
+                    "-f", "lavfi", "-i", "color=c=blue:s=720x1280:d=2:r=24",
+                    "-filter_complex", "[0:v][1:v]concat=n=2:v=1[v]", "-map", "[v]", "-pix_fmt", "yuv420p",
+                    str(video_dir / "redblue.mp4")], check=True)
+    res = await call("create_reel", background=False, title="x", music="none", scenes=[
+        {"text": "Синий.", "media": "redblue.mp4", "media_start": 2.5, "label": "t.me/nexus_subs_bot"}])
+    assert not res.isError, res.content[0].text
+    workdir = jobs.job_dir(res.content[0].text.split()[1])
+    assert (workdir / "label00.txt").read_text() == "t.me/nexus_subs_bot"
+    frame = workdir / "f.png"
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", "0.2", "-i",
+                    str(workdir / "reel.mp4"), "-frames:v", "1", str(frame)], check=True)
+    r, g, b = Image.open(frame).convert("RGB").resize((1, 1)).getpixel((0, 0))
+    assert b > r, (r, g, b)

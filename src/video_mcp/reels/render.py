@@ -40,6 +40,7 @@ class SceneOut:
     audio: Path
     words: list[tts.Word]
     duration: float = 0.0
+    start: float = 0.0  # where to start inside a video clip (Gemini can return a continued clip)
 
 
 def _ff(*args: str) -> None:
@@ -147,7 +148,8 @@ def _prepare_scene(job: dict, i: int, workdir: Path) -> SceneOut:
         visual, kind = png, "image"
     audio = stem.with_suffix(".mp3")
     words = tts.synthesize(scene["text"], audio)
-    return SceneOut(visual, kind, audio, words)
+    start = float(scene.get("media_start") or 0) if kind == "video" else 0.0
+    return SceneOut(visual, kind, audio, words, start=start)
 
 
 def _animate_scene(job: dict, i: int, o: SceneOut, workdir: Path) -> Path | None:
@@ -193,7 +195,8 @@ def _scene_clip(o: SceneOut, index: int, workdir: Path) -> Path:
               "-pix_fmt", "yuv420p", "-r", str(FPS)]
     if o.kind == "video":
         # clips shorter than the scene hold their last frame
-        _ff("-i", str(o.visual),
+        seek = ["-ss", f"{o.start:.3f}"] if o.start > 0 else []
+        _ff(*seek, "-i", str(o.visual),
             "-vf", f"scale={images.W}:{images.H}:force_original_aspect_ratio=increase,"
                    f"crop={images.W}:{images.H},fps={FPS},setsar=1,tpad=stop_mode=clone:stop_duration=60",
             *common, str(out))
@@ -238,8 +241,9 @@ def _labels(scenes: list[dict], durations: list[float], workdir: Path) -> list[s
         label = (scene.get("label") or "").strip()
         if label:
             path = workdir / f"label{i:02d}.txt"
-            path.write_text(label.upper())
-            out.append(_drawtext(path, size=_fit_size(label.upper(), 92), color="white", box="0x0B1030@0.78",
+            text = label if ("/" in label or "@" in label) else label.upper()  # links keep their case
+            path.write_text(text)
+            out.append(_drawtext(path, size=_fit_size(text, 92), color="white", box="0x0B1030@0.78",
                                  y="h*0.12", enable=f"between(t,{t:.2f},{t + d:.2f})"))
         t += d
     return out

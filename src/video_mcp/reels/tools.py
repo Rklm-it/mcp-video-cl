@@ -52,6 +52,8 @@ class Scene(BaseModel):
     media: str | None = Field(None, description="Instead of generating: image/video URL or a file name "
                                                 "in the server's video folder (e.g. a clip made in Veo/Kling)")
     offer: bool = Field(False, description="Show the offer banner during this scene")
+    media_start: float = Field(0, ge=0, description="Start the media video clip at this second "
+                                                    "(e.g. skip a repeated beginning of a continued clip)")
     label: str = Field("", description="Big on-screen caption at the top for this scene (Russian or a term "
                                        "like «DPI»), 1-3 words; the picture itself stays without text")
     animate: bool | None = Field(None, description="Turn the picture into a short AI video (paid). "
@@ -66,6 +68,7 @@ class SceneEdit(BaseModel):
     offer: bool | None = None
     animate: bool | None = None
     label: str | None = None
+    media_start: float | None = Field(None, ge=0)
 
 
 _registered = False
@@ -255,7 +258,7 @@ def register(mcp: FastMCP, run) -> None:
             if not 0 <= ch.index < len(job["scenes"]):
                 raise ValueError(f"No scene {ch.index}")
             scene = job["scenes"][ch.index]
-            for key in ("text", "image_prompt", "media", "offer", "animate", "label"):
+            for key in ("text", "image_prompt", "media", "offer", "animate", "label", "media_start"):
                 value = getattr(ch, key)
                 if value is not None:
                     scene[key] = value
