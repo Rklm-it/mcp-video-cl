@@ -11,6 +11,9 @@ from video_mcp.reels import tools as reels_tools
 from video_mcp.reels.config import reels_settings
 
 
+REAL_SYNTHESIZE = tts.synthesize
+
+
 def fake_synthesize(text, out):
     """1.2 s of tone per scene with evenly spread word timings (no network)."""
     subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi",
@@ -303,6 +306,49 @@ def test_openai_compatible_tts_gateway(tmp_path, monkeypatch):
     assert [w.text for w in words][0] == "Карта" and len(words) == 6
     assert words[0].start == pytest.approx(0.08) and words[-1].end == pytest.approx(2 - 0.12, abs=0.1)
     assert all(a.end == pytest.approx(b.start) for a, b in zip(words, words[1:]))
+
+
+def test_voice_spec_override_speed_and_samples(tmp_path, monkeypatch):
+    from video_mcp.reels import voice_samples
+
+    assert tts.parse_voice("gemini/gemini-2.5-flash-preview-tts:Charon") == (
+        "openai", "gemini/gemini-2.5-flash-preview-tts", "Charon")
+    assert tts.parse_voice("elevenlabs:abc123") == ("elevenlabs", "", "abc123")
+    with pytest.raises(ValueError):
+        tts.parse_voice("onyx")
+    mp3 = tmp_path / "src.mp3"
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi",
+                    "-i", "sine=frequency=300:duration=2", "-c:a", "libmp3lame", str(mp3)], check=True)
+    bodies, sent = [], []
+
+    class Resp:
+        status_code = 200
+        content = mp3.read_bytes()
+        text = ""
+
+    def fake_post(url, headers, json, timeout):
+        bodies.append(json)
+        if json["voice"] == "Broken":
+            raise RuntimeError("gateway 500")
+        return Resp()
+
+    monkeypatch.setattr(reels_settings, "openai_key", "tw-key")
+    monkeypatch.setattr(reels_settings, "voice_speed", 1.0)
+    monkeypatch.setattr(tts, "synthesize", REAL_SYNTHESIZE)
+    monkeypatch.setattr(tts.net, "post", fake_post)
+    monkeypatch.setattr(voice_samples, "_tg", lambda method, **kw: sent.append((method, kw["data"]["caption"])))
+    results = voice_samples.run("Купил VPN — через месяц он умер", ["openai/gpt-4o-mini-tts:cedar",
+                                                                   "gemini/x-tts:Broken"], speed=1.25)
+    assert results[0] == ("openai/gpt-4o-mini-tts:cedar", "ok") and "gateway 500" in results[1][1]
+    assert bodies[0]["model"] == "openai/gpt-4o-mini-tts" and bodies[0]["voice"] == "cedar"
+    assert sent == [("sendAudio", "1. openai/gpt-4o-mini-tts:cedar · темп 1.25")]
+    # the configured speed shortens the audio and the subtitle timings alike
+    out = tmp_path / "fast.mp3"
+    words = tts.synthesize("Купил VPN — через месяц он умер", out, voice="openai/gpt-4o-mini-tts:cedar")
+    from video_mcp.frames import probe_duration
+
+    assert probe_duration(out) == pytest.approx(1.6, abs=0.1)
+    assert words[-1].end == pytest.approx((2 - 0.12) / 1.25, abs=0.1)
 
 
 async def test_animate_all_renders_in_background(monkeypatch):

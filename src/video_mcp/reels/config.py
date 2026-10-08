@@ -33,6 +33,8 @@ class ReelsSettings:
         "REELS_OPENAI_TTS_INSTRUCTIONS",
         ("Говори по-русски естественно, как молодой блогер рассказывает другу интересную вещь: живые интонации, "
          "лёгкая улыбка в голосе, короткие паузы перед главным словом, бодрый темп, без дикторского пафоса.")))
+    # Speech tempo after synthesis (1.0 = as generated; 1.1 sounds livelier, pitch unchanged)
+    voice_speed: float = field(default_factory=lambda: float(_env("REELS_VOICE_SPEED", "1.0")))
     elevenlabs_key: str = field(default_factory=lambda: _env("REELS_ELEVENLABS_API_KEY"))
     elevenlabs_voice: str = field(default_factory=lambda: _env("REELS_ELEVENLABS_VOICE_ID"))
     elevenlabs_model: str = field(default_factory=lambda: _env("REELS_ELEVENLABS_MODEL", "eleven_multilingual_v2"))

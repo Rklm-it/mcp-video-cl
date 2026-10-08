@@ -19,23 +19,50 @@ class Word:
     end: float
 
 
-def synthesize(text: str, out: Path) -> list[Word]:
-    """Write speech for `text` to `out` (mp3) and return word timings relative to its start."""
-    provider = reels_settings.tts
+def synthesize(text: str, out: Path, voice: str | None = None) -> list[Word]:
+    """Write speech for `text` to `out` (mp3) and return word timings relative to its start.
+
+    `voice` overrides the configured voice with a spec (see `parse_voice`), e.g. for voice samples."""
+    provider, model, name = parse_voice(voice) if voice else (reels_settings.tts, "", "")
     if provider == "edge":
-        return asyncio.run(_edge(text, out))
-    if provider == "elevenlabs":
-        return _elevenlabs(text, out)
-    if provider == "openai":
-        return _openai(text, out)
-    raise ValueError(f"Unknown REELS_TTS={provider!r} (use edge, openai or elevenlabs)")
+        words = asyncio.run(_edge(text, out, name))
+    elif provider == "elevenlabs":
+        words = _elevenlabs(text, out, name)
+    elif provider == "openai":
+        words = _openai(text, out, model, name)
+    else:
+        raise ValueError(f"Unknown REELS_TTS={provider!r} (use edge, openai or elevenlabs)")
+    return _speed_up(out, words, reels_settings.voice_speed)
 
 
-async def _edge(text: str, out: Path) -> list[Word]:
+def parse_voice(spec: str) -> tuple[str, str, str]:
+    """'edge:ru-RU-DmitryNeural' | 'elevenlabs:<voice id>' | '<gateway model>:<voice>' (OpenAI-compatible,
+    e.g. 'gemini/gemini-2.5-flash-preview-tts:Charon') -> (provider, model, voice)."""
+    head, _, name = spec.rpartition(":")
+    if not head or not name:
+        raise ValueError(f"Voice spec {spec!r}: expected '<provider or model>:<voice>'")
+    if head in ("edge", "elevenlabs"):
+        return head, "", name
+    return "openai", head, name
+
+
+def _speed_up(out: Path, words: list[Word], speed: float) -> list[Word]:
+    """Faster speech sounds livelier and keeps shorts short; the pitch stays the same (atempo)."""
+    if abs(speed - 1.0) < 0.01:
+        return words
+    tmp = out.with_name(out.stem + ".speed.mp3")
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(out),
+                    "-filter:a", f"atempo={speed:.3f}", "-c:a", "libmp3lame", "-b:a", "128k", str(tmp)],
+                   check=True)
+    tmp.replace(out)
+    return [Word(w.text, w.start / speed, w.end / speed) for w in words]
+
+
+async def _edge(text: str, out: Path, voice: str = "") -> list[Word]:
     import edge_tts
 
     comm = edge_tts.Communicate(
-        text, reels_settings.edge_voice, rate=reels_settings.edge_rate, boundary="WordBoundary"
+        text, voice or reels_settings.edge_voice, rate=reels_settings.edge_rate, boundary="WordBoundary"
     )
     words: list[Word] = []
     with out.open("wb") as f:
@@ -50,12 +77,13 @@ async def _edge(text: str, out: Path) -> list[Word]:
     return words
 
 
-def _elevenlabs(text: str, out: Path) -> list[Word]:
+def _elevenlabs(text: str, out: Path, voice: str = "") -> list[Word]:
     s = reels_settings
-    if not (s.elevenlabs_key and s.elevenlabs_voice):
+    voice = voice or s.elevenlabs_voice
+    if not (s.elevenlabs_key and voice):
         raise ValueError("Set REELS_ELEVENLABS_API_KEY and REELS_ELEVENLABS_VOICE_ID")
     resp = net.post(
-        f"https://api.elevenlabs.io/v1/text-to-speech/{s.elevenlabs_voice}/with-timestamps",
+        f"https://api.elevenlabs.io/v1/text-to-speech/{voice}/with-timestamps",
         params={"output_format": "mp3_44100_128"},
         headers={"xi-api-key": s.elevenlabs_key},
         json={"text": text, "model_id": s.elevenlabs_model},
@@ -73,7 +101,7 @@ def _elevenlabs(text: str, out: Path) -> list[Word]:
     )
 
 
-def _openai(text: str, out: Path) -> list[Word]:
+def _openai(text: str, out: Path, model: str = "", voice: str = "") -> list[Word]:
     """OpenAI-compatible /audio/speech. It returns no timings, so words are spread over the audio
     by their length, which is close enough for 2-3 word subtitle lines."""
     from ..frames import probe_duration
@@ -81,8 +109,9 @@ def _openai(text: str, out: Path) -> list[Word]:
     s = reels_settings
     if not s.openai_key:
         raise ValueError("Set REELS_OPENAI_API_KEY (and REELS_OPENAI_BASE_URL for a gateway)")
-    body = {"model": s.openai_tts_model, "voice": s.openai_tts_voice, "input": text}
-    if not s.openai_tts_model.startswith("gemini/"):
+    model, voice = model or s.openai_tts_model, voice or s.openai_tts_voice
+    body = {"model": model, "voice": voice, "input": text}
+    if not model.startswith("gemini/"):
         # Timeweb answers 500 to any response_format for Gemini voices; they come as WAV by default
         body["response_format"] = "mp3"
     if s.openai_tts_instructions:
