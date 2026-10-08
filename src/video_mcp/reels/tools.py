@@ -289,6 +289,22 @@ def register(mcp: FastMCP, run) -> None:
         )
 
     @mcp.tool(annotations=READ, structured_output=False)
+    async def youtube_stats(
+        video: Annotated[str | None, Field(description="Video id or link for one video in depth "
+                                                       "(retention, traffic sources); empty = whole channel")] = None,
+        days: Annotated[int, Field(ge=1, le=365, description="Period in days")] = 28,
+    ) -> str:
+        """YouTube channel analytics the owner sees in Studio: per video views, average view duration and
+        percentage, likes, subscribers gained; for one video also traffic sources and the retention curve.
+        Needs the REELS_YT_* credentials from video-mcp-youtube-auth."""
+        from . import youtube_stats as yts
+
+        s = reels_settings
+        if not (s.yt_client_id and s.yt_client_secret and s.yt_refresh_token):
+            raise ValueError("YouTube is not connected: run video-mcp-youtube-auth and add REELS_YT_* to .env")
+        return await run(yts.report, video, days)
+
+    @mcp.tool(annotations=READ, structured_output=False)
     async def get_reel(
         job_id: str,
         frames: Annotated[int, Field(ge=0, le=8, description="Preview frames to return")] = 4,

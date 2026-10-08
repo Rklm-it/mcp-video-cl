@@ -219,6 +219,8 @@ YouTube подключается один раз:
    **YouTube Data API v3**, создайте OAuth Client ID типа «Desktop app».
 2. На сервере запустите `docker compose run --rm --entrypoint video-mcp-youtube-auth video-mcp`
    и следуйте подсказкам. Три строки `REELS_YT_*`, которые он выведет, добавьте в `.env`.
+3. Для «Студии» в Google Cloud включите ещё **YouTube Analytics API**: тогда `youtube_stats` покажет
+   удержание, источники трафика и средний процент просмотра. Только статистика без загрузки — `REELS_YT_UPLOAD=0`.
 
 Бесплатная квота YouTube API — около 6 загрузок в сутки.
 

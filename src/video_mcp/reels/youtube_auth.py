@@ -1,4 +1,4 @@
-"""One-time helper: get a YouTube refresh token for uploading Shorts.
+"""One-time helper: get a YouTube refresh token for uploading Shorts and reading channel analytics.
 
 Run on the server:  docker compose run --rm --entrypoint video-mcp-youtube-auth video-mcp
 """
@@ -12,7 +12,11 @@ import httpx
 
 from .config import reels_settings
 
-SCOPE = "https://www.googleapis.com/auth/youtube.upload"
+SCOPE = " ".join([
+    "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/youtube.readonly",
+    "https://www.googleapis.com/auth/yt-analytics.readonly",
+])
 REDIRECT = "http://localhost"
 
 

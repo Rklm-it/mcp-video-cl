@@ -593,3 +593,57 @@ async def test_generate_image_returns_full_size_picture_without_voice(monkeypatc
     image = Image.open(io.BytesIO(b64.b64decode(result.content[1].data)))
     assert image.size == (1024, 1024)
     assert list((reels_settings.root / "images").glob("*.png"))
+
+
+async def test_youtube_stats_channel_and_video(monkeypatch):
+    from video_mcp.reels import youtube_stats as yts
+
+    monkeypatch.setattr(reels_settings, "yt_client_id", "id")
+    monkeypatch.setattr(reels_settings, "yt_client_secret", "secret")
+    monkeypatch.setattr(reels_settings, "yt_refresh_token", "rt")
+    monkeypatch.setattr(yts, "_youtube_token", lambda: "tok")
+
+    def fake_get(url, token, params):
+        assert token == "tok"
+        if url.endswith("/channels"):
+            return {"items": [{"snippet": {"title": "Nexus"}, "statistics": {"subscriberCount": "7",
+                    "viewCount": "1305", "videoCount": "1"},
+                    "contentDetails": {"relatedPlaylists": {"uploads": "UU1"}}}]}
+        if url.endswith("/playlistItems"):
+            return {"items": [{"contentDetails": {"videoId": "abc"}}]}
+        if url.endswith("/videos"):
+            return {"items": [{"id": "abc", "snippet": {"title": "Белые списки"},
+                               "contentDetails": {"duration": "PT41S"}}]}
+        dims = params.get("dimensions")
+        if dims == "video":
+            return {"columnHeaders": [{"name": n} for n in ("video",) + yts.VIDEO_METRICS],
+                    "rows": [["abc", 1305, 354, 24.3, 59.2, 24, 2, 1, 7]]}
+        if dims == "insightTrafficSourceType":
+            return {"columnHeaders": [{"name": "insightTrafficSourceType"}, {"name": "views"}],
+                    "rows": [["SHORTS", 970], ["YT_SEARCH", 30]]}
+        if dims == "elapsedVideoTimeRatio":
+            return {"columnHeaders": [{"name": "elapsedVideoTimeRatio"}, {"name": "audienceWatchRatio"}],
+                    "rows": [[i / 100, 1 - i / 200] for i in range(1, 101)]}
+        return {"columnHeaders": [{"name": n} for n in yts.VIDEO_METRICS],
+                "rows": [[1305, 354, 24.3, 59.2, 24, 2, 1, 7]]}
+
+    monkeypatch.setattr(yts, "_get", fake_get)
+    res = await call("youtube_stats")
+    text = res.content[0].text
+    assert not res.isError, text
+    assert "подписчиков 7" in text and "Белые списки — 1305 просм." in text and "ср. 0:24 (59%)" in text
+
+    res = await call("youtube_stats", video="https://youtube.com/shorts/abc")
+    text = res.content[0].text
+    assert not res.isError, text
+    assert "лента Shorts 97%" in text and "поиск YouTube 3%" in text
+    assert "Удержание" in text and "0:41 — 50%" in text
+
+
+def test_youtube_upload_can_be_switched_off(monkeypatch):
+    monkeypatch.setattr(reels_settings, "yt_client_id", "id")
+    monkeypatch.setattr(reels_settings, "yt_client_secret", "secret")
+    monkeypatch.setattr(reels_settings, "yt_refresh_token", "rt")
+    assert "youtube" in reels_settings.publish_targets()
+    monkeypatch.setattr(reels_settings, "yt_upload", False)
+    assert "youtube" not in reels_settings.publish_targets()

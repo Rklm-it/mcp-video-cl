@@ -91,6 +91,8 @@ class ReelsSettings:
     yt_client_secret: str = field(default_factory=lambda: _env("REELS_YT_CLIENT_SECRET"))
     yt_refresh_token: str = field(default_factory=lambda: _env("REELS_YT_REFRESH_TOKEN"))
     yt_privacy: str = field(default_factory=lambda: _env("REELS_YT_PRIVACY", "public"))
+    # 0 = the YouTube credentials are only for analytics (youtube_stats), never upload
+    yt_upload: bool = field(default_factory=lambda: _env("REELS_YT_UPLOAD", "1") != "0")
 
     def __post_init__(self) -> None:
         if self.max_animated <= 0:
@@ -122,7 +124,7 @@ class ReelsSettings:
         targets = []
         if self.tg_token and self.tg_channel:
             targets.append("telegram")
-        if self.yt_client_id and self.yt_client_secret and self.yt_refresh_token:
+        if self.yt_upload and self.yt_client_id and self.yt_client_secret and self.yt_refresh_token:
             targets.append("youtube")
         return targets
 
