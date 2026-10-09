@@ -60,41 +60,71 @@ def where(c: Canvas, t: float) -> None:
     source(c, t, "млрд ₽ в год · ГРЧЦ (Роскомнадзор), проект бюджета")
 
 
-def means(c: Canvas, t: float) -> None:
-    c.header("03 / ЧТО ЭТО ЗНАЧИТ", t)
-    c.title("БЛОКИРОВАТЬ", "БУДУТ БЫСТРЕЕ", t)
-    c.pill((540, 520), "прогноз Nexus", CYAN, t, 0.2, size=34)
-    for i in range(3):
-        y = 610 + i * 175
-        dead = t >= 1.3 + i * 0.5
-        c.card((90, y, 990, y + 140), t, 0.4 + i * 0.15, outline=RED if dead else (60, 85, 150),
-               width=5 if dead else 3)
-        c.text((140, y + 30), f"VPN {'ABC'[i]}", 46, WHITE, "Unbounded", "Black", t, 0.45 + i * 0.15)
-        c.text((140, y + 92), "один сервер", 30, MUTED, t=t, t0=0.5 + i * 0.15)
-        if dead:
-            c.pill((830, y + 70), "заблокирован", RED, t, 1.3 + i * 0.5, size=30, text_color=WHITE)
-        else:
-            c.pill((830, y + 70), "работает", GREEN, t, 0.6 + i * 0.15, size=30)
-    c.text((540, 1200), "слабые VPN будут умирать чаще", 46, YELLOW, "Manrope", "ExtraBold", t, 2.9,
+def capacity(c: Canvas, t: float) -> None:
+    c.header("03 / ЦЕЛЬ", t)
+    c.title("ФИЛЬТРЫ", "РАЗГОНЯТ", t)
+    c.card((90, 470, 990, 1210), t, 0.2, outline=CYAN, fill=(14, 24, 56))
+    c.text((140, 510), "пропускная способность ТСПУ к 2030", 34, MUTED, "Manrope", "ExtraBold", t, 0.3)
+    v = 953.9 * ease((t - 0.5) / 1.6)
+    c.text((540, 690), f"{v:,.0f}".replace(",", " "), 150, CYAN, "Unbounded", "Black", t, 0.4, anchor="mm",
+           glow=12)
+    c.text((540, 800), "терабит в секунду", 40, WHITE, "Manrope", "ExtraBold", t, 0.5, anchor="mm")
+    rows = (("план 2024 года", 725.6, (110, 125, 170), 1.4), ("план Минцифры 2025–2030", 953.9, CYAN, 1.9))
+    for i, (name, val, col, t0) in enumerate(rows):
+        y = 900 + i * 140
+        c.text((140, y), name, 34, WHITE, "Manrope", "ExtraBold", t, t0)
+        c.text((940, y), f"{val:g}".replace(".", ","), 34, col, "Unbounded", "Black", t, t0, anchor="ra")
+        bar(c, (140, y + 55, 940, y + 100), val / 953.9, col, t, t0 + 0.1)
+    source(c, t, "Тбит/с · по данным Forbes, план Минцифры")
+
+
+def chips(c: Canvas, t: float) -> None:
+    c.header("04 / ПОЧЕМУ ДОРОЖЕ", t)
+    c.title("ПАМЯТЬ", "ПОДОРОЖАЛА В РАЗЫ", t)
+    # memory chip
+    p = c.card((330, 480, 750, 760), t, 0.2, outline=YELLOW, fill=CARD, radius=18, width=6)
+    if p > 0:
+        lay, d = c.layer()
+        for k in range(7):
+            x = 365 + k * 55
+            d.rectangle((x, 455, x + 22, 480), fill=YELLOW)
+            d.rectangle((x, 760, x + 22, 785), fill=YELLOW)
+        c.put(lay, p)
+    c.text((540, 590), "RAM", 70, YELLOW, "Unbounded", "Black", t, 0.3, anchor="mm")
+    c.text((540, 680), "для DPI-фильтров", 30, MUTED, t=t, t0=0.4, anchor="mm")
+    k = 1 + 5 * ease((t - 0.8) / 1.2)
+    c.text((540, 900), f"×{k:.0f}" if t < 2.0 else "×4–6", 130, RED, "Unbounded", "Black", t, 0.8,
+           anchor="mm", glow=12)
+    c.text((540, 1010), "рост цены за год — из-за бума ИИ", 38, WHITE, "Manrope", "ExtraBold", t, 1.6,
            anchor="mm")
+    c.pill((540, 1120), "64 ГБ памяти на каждые 10 Гбит/с", YELLOW, t, 2.3, size=34)
+    source(c, t, "оценки экспертов ComNews, RUVDS · Forbes")
 
 
-def todo(c: Canvas, t: float) -> None:
-    c.header("04 / ЧТО ДЕЛАТЬ", t)
-    c.title("ВЫБИРАЙ VPN", "С ЗАПАСОМ", t)
-    items = ("несколько серверов", "сам переключает на рабочий", "есть пробный период")
-    for i, it in enumerate(items):
-        y = 520 + i * 165
-        c.card((90, y, 990, y + 130), t, 0.3 + i * 0.35, outline=GREEN, fill=CARD)
-        c.mark((170, y + 65), True, t, 0.5 + i * 0.35, r=40)
-        c.text((240, y + 42), it, 44, WHITE, "Manrope", "ExtraBold", t, 0.45 + i * 0.35)
-    c.pill((540, 1100), "t.me/nexus_subs_bot · NEXUS3", YELLOW, t, 1.9, size=40)
-    c.text((540, 1200), "3 дня бесплатно", 40, MUTED, "Manrope", "ExtraBold", t, 2.1, anchor="mm")
+def next_(c: Canvas, t: float) -> None:
+    c.header("05 / ЧТО ДАЛЬШЕ", t)
+    c.title("ФИЛЬТРЫ ДОЙДУТ", "ДО МЕЛКИХ ОПЕРАТОРОВ", t)
+    c.pill((540, 520), "прогноз экспертов", CYAN, t, 0.2, size=34)
+    ops = (("крупные операторы", True), ("региональные", False), ("новые узлы связи", False))
+    for i, (name, has) in enumerate(ops):
+        y = 610 + i * 165
+        done = has or t >= 1.6 + i * 0.5
+        c.card((90, y, 990, y + 130), t, 0.4 + i * 0.2, outline=YELLOW if done else (60, 85, 150),
+               width=5 if done else 3)
+        c.text((140, y + 42), name, 44, WHITE, "Manrope", "ExtraBold", t, 0.45 + i * 0.2)
+        if done:
+            c.pill((830, y + 65), "ТСПУ", YELLOW, t, 0.6 if has else 1.6 + i * 0.5, size=32)
+        else:
+            c.pill((830, y + 65), "пока нет", (60, 85, 150), t, 0.6, size=32, text_color=WHITE)
+    c.pill((540, 1150), "подпишись — новости блокировок", WHITE, t, 2.8, size=36)
+    c.text((540, 1250), "VPN при белых списках: t.me/nexus_subs_bot", 28, MUTED, "Manrope", "Bold", t, 3.0,
+           anchor="mm")
 
 
 SCENES = {
     "n1_01": (money, 7.0),
     "n1_02": (where, 7.0),
-    "n1_03": (means, 7.0),
-    "n1_04": (todo, 7.0),
+    "n1_03": (capacity, 7.0),
+    "n1_04": (chips, 8.0),
+    "n1_05": (next_, 8.0),
 }
