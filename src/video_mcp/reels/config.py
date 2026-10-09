@@ -33,6 +33,9 @@ class ReelsSettings:
         "REELS_OPENAI_TTS_INSTRUCTIONS",
         ("Говори по-русски естественно, как молодой блогер рассказывает другу интересную вещь: живые интонации, "
          "лёгкая улыбка в голосе, короткие паузы перед главным словом, бодрый темп, без дикторского пафоса.")))
+    # Subtitle baseline height above the bottom edge, px of 1920 (lower = closer to the bottom; the Shorts
+    # and Reels buttons cover the last ~350 px)
+    subtitle_margin: int = field(default_factory=lambda: int(_env("REELS_SUBTITLE_MARGIN", "560")))
     # Speech tempo after synthesis (1.0 = as generated; 1.1 sounds livelier, pitch unchanged)
     voice_speed: float = field(default_factory=lambda: float(_env("REELS_VOICE_SPEED", "1.0")))
     elevenlabs_key: str = field(default_factory=lambda: _env("REELS_ELEVENLABS_API_KEY"))
