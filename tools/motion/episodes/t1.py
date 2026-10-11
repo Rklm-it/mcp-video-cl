@@ -8,7 +8,7 @@ from motion import CARD, CYAN, GREEN, MUTED, NAVY, RED, WHITE, YELLOW, Canvas, e
 
 def hook(c: Canvas, t: float) -> None:
     c.header("01 / ЦИФРА", t)
-    c.title("65 МИЛЛИОНОВ", "ЧЕРЕЗ VPN", t)
+    c.title("ТЕБЯ ОТРЕЗАЮТ", "ОТ TELEGRAM", t)
     v = 65_000_000 * ease((t - 0.4) / 1.6)
     c.text((540, 640), f"{v:,.0f}".replace(",", " "), 118, CYAN, "Unbounded", "Black", t, 0.4, anchor="mm",
            glow=12)
@@ -24,7 +24,7 @@ def hook(c: Canvas, t: float) -> None:
 
 def timeline(c: Canvas, t: float) -> None:
     c.header("02 / КАК ДОШЛИ", t)
-    c.title("ШАГ ЗА ШАГОМ", "ЗАЖИМАЮТ", t)
+    c.title("СНАЧАЛА ЗВОНКИ,", "ПОТОМ ВСЁ ОСТАЛЬНОЕ", t)
     rows = (("август 2025", "звонки отключили", RED),
             ("10 февраля 2026", "РКН: замедляем весь Telegram", RED),
             ("март 2026", "6 тыс. жалоб на сбои за день", YELLOW))
@@ -48,7 +48,7 @@ def timeline(c: Canvas, t: float) -> None:
 
 def media(c: Canvas, t: float) -> None:
     c.header("03 / ЧТО РЕЖУТ", t)
-    c.title("ТЕКСТ ИДЁТ,", "МЕДИА ТОРМОЗИТ", t)
+    c.title("ЭТО НЕ ТВОЙ", "ТЕЛЕФОН ГЛЮЧИТ", t)
     c.card((140, 480, 940, 1220), t, 0.2, outline=(70, 95, 160), fill=(14, 24, 56), radius=46)
     c.text((190, 510), "Чат", 40, WHITE, "Manrope", "ExtraBold", t, 0.25)
     c.text((890, 515), "LTE", 30, MUTED, "Manrope", "Bold", t, 0.25, anchor="ra")
@@ -74,7 +74,7 @@ def media(c: Canvas, t: float) -> None:
 
 def disguise(c: Canvas, t: float) -> None:
     c.header("04 / ОТВЕТ TELEGRAM", t)
-    c.title("TELEGRAM", "МАСКИРУЕТСЯ", t)
+    c.title("КОШКИ-МЫШКИ", "С ФИЛЬТРАМИ", t)
     c.card((400, 640, 700, 860), t, 0.3, outline=YELLOW, width=6)
     c.text((550, 725), "ТСПУ", 64, YELLOW, "Unbounded", "Black", t, 0.35, anchor="mm")
     c.text((550, 810), "ищет Telegram", 30, MUTED, t=t, t0=0.4, anchor="mm")
@@ -108,26 +108,35 @@ def disguise(c: Canvas, t: float) -> None:
 
 
 def _outro(c: Canvas, t: float) -> None:
-    c.header("05 / ЧТО ДЕЛАТЬ", t)
-    c.title("TELEGRAM", "БЕЗ ТОРМОЗОВ", t)
-    items = ("голосовые и видео грузятся", "фото открываются сразу", "работает и на мобильном")
-    for i, it in enumerate(items):
-        y = 500 + i * 160
-        c.card((90, y, 990, y + 125), t, 0.3 + i * 0.35, outline=GREEN, fill=CARD)
-        c.mark((170, y + 62), True, t, 0.5 + i * 0.35, r=40)
-        c.text((240, y + 40), it, 40, WHITE, "Manrope", "ExtraBold", t, 0.45 + i * 0.35)
+    c.header("05 / ДО И ПОСЛЕ", t)
+    c.title("НА СИМКЕ С NEXUS", "РАБОТАЕТ ВСЁ", t)
+    cols = ((90, "без VPN", RED, False, 0.3), (560, "с Nexus", GREEN, True, 1.2))
+    rows = ("голосовые, видео", "любые сайты", "труднодоступные")
+    for x, name, col, ok, t0 in cols:
+        c.card((x, 480, x + 430, 900), t, t0, outline=col, width=5)
+        c.text((x + 215, 530), name, 44, col, "Unbounded", "Black", t, t0 + 0.05, anchor="mm")
+        for k, r in enumerate(rows):
+            y = 610 + k * 95
+            c.text((x + 30, y), r, 30, WHITE, "Manrope", "ExtraBold", t, t0 + 0.15 + k * 0.15)
+            if ok:
+                c.mark((x + 385, y + 18), True, t, t0 + 0.3 + k * 0.2, r=26)
+            elif t < 1.0:
+                c.spinner((x + 385, y + 18), t, r=20)
+            else:
+                c.mark((x + 385, y + 18), False, t, 1.0 + k * 0.1, r=26)
+    c.pill((540, 960), "мобильный интернет · даже при белых списках", CYAN, t, 1.9, size=32)
 
 
 def outro_youtube(c: Canvas, t: float) -> None:
     _outro(c, t)
-    c.pill((540, 1050), "t.me/nexus_subs_bot · NEXUS3", YELLOW, t, 1.8, size=40)
-    c.text((540, 1150), "3 дня бесплатно", 36, MUTED, "Manrope", "ExtraBold", t, 2.1, anchor="mm")
+    c.pill((540, 1070), "t.me/nexus_subs_bot · NEXUS3", YELLOW, t, 2.4, size=40)
+    c.text((540, 1165), "3 дня бесплатно — проверь сам", 36, MUTED, "Manrope", "ExtraBold", t, 2.4, anchor="mm")
 
 
 def outro_instagram(c: Canvas, t: float) -> None:
     _outro(c, t)
-    c.pill((540, 1050), "напиши VPN в комментах", YELLOW, t, 1.8, size=44)
-    c.text((540, 1150), "пришлю ссылку и 3 дня бесплатно", 34, MUTED, "Manrope", "ExtraBold", t, 2.1,
+    c.pill((540, 1070), "напиши VPN в комментах", YELLOW, t, 2.4, size=44)
+    c.text((540, 1165), "пришлю ссылку и 3 дня бесплатно", 34, MUTED, "Manrope", "ExtraBold", t, 2.4,
            anchor="mm")
 
 
