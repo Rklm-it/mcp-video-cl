@@ -121,4 +121,6 @@ SCENES = {
     "m1_05": (result, 6.0),
     "m1_06yt": (outro_youtube, 8.0),
     "m1_06ig": (outro_instagram, 8.0),
+    # Instagram cut: no fade-in on frame one — title, apps and the walking user are already on screen
+    "m1_01hot": (hook, 4.0, 1.0),
 }

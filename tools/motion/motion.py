@@ -244,7 +244,8 @@ class Canvas:
         self.mark((cx, y1 - 90), state == "ok", t, mark_t, r=46)
 
 
-def render(draw, seconds: float, out: Path) -> Path:
+def render(draw, seconds: float, out: Path, start: float = 0.0) -> Path:
+    """start > 0 skips the build-up: the first frame already shows the hook (feeds judge frame one)."""
     out.parent.mkdir(parents=True, exist_ok=True)
     proc = subprocess.Popen(
         ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24",
@@ -253,7 +254,7 @@ def render(draw, seconds: float, out: Path) -> Path:
         stdin=subprocess.PIPE)
     for i in range(int(seconds * FPS)):
         c = Canvas()
-        draw(c, i / FPS)
+        draw(c, start + i / FPS)
         proc.stdin.write(c.img.convert("RGB").tobytes())
     proc.stdin.close()
     if proc.wait():
@@ -266,5 +267,7 @@ if __name__ == "__main__":
 
     episode, out_dir = sys.argv[1], Path(sys.argv[2])
     mod = importlib.import_module(f"episodes.{episode}")
-    for name, (draw, seconds) in mod.SCENES.items():
-        print(render(draw, seconds, out_dir / f"{name}.mp4"))
+    only = set(sys.argv[3:])
+    for name, (draw, seconds, *start) in mod.SCENES.items():
+        if not only or name in only:
+            print(render(draw, seconds, out_dir / f"{name}.mp4", *start))
