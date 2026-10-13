@@ -659,10 +659,12 @@ async def test_youtube_stats_channel_and_video(monkeypatch):
                     "viewCount": "1305", "videoCount": "1"},
                     "contentDetails": {"relatedPlaylists": {"uploads": "UU1"}}}]}
         if url.endswith("/playlistItems"):
-            return {"items": [{"contentDetails": {"videoId": "abc"}}]}
+            return {"items": [{"contentDetails": {"videoId": "abc"}}, {"contentDetails": {"videoId": "new"}}]}
         if url.endswith("/videos"):
             return {"items": [{"id": "abc", "snippet": {"title": "Белые списки"},
-                               "contentDetails": {"duration": "PT41S"}}]}
+                               "contentDetails": {"duration": "PT41S"}},
+                              {"id": "new", "snippet": {"title": "Свежий ролик"}, "contentDetails": {},
+                               "statistics": {"viewCount": "72", "likeCount": "3", "commentCount": "1"}}]}
         dims = params.get("dimensions")
         if dims == "video":
             return {"columnHeaders": [{"name": n} for n in ("video",) + yts.VIDEO_METRICS],
@@ -681,6 +683,7 @@ async def test_youtube_stats_channel_and_video(monkeypatch):
     text = res.content[0].text
     assert not res.isError, text
     assert "подписчиков 7" in text and "Белые списки — 1305 просм." in text and "ср. 0:24 (59%)" in text
+    assert "Свежий ролик — 72 просм., лайки 3, комментарии 1 — youtu.be/new" in text
 
     res = await call("youtube_stats", video="https://youtube.com/shorts/abc")
     text = res.content[0].text

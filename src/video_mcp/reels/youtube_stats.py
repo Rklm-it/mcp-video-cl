@@ -114,6 +114,15 @@ def report(video: str | None = None, days: int = 28) -> str:
         lines.append(f"• {titles.get(r['video'], r['video'])[:60]} — {r['views']} просм., "
                      f"ср. {_secs(r['averageViewDuration'])} ({float(r['averageViewPercentage']):.0f}%), "
                      f"лайки {r['likes']}, подписки +{r['subscribersGained']} — youtu.be/{r['video']}")
+    # Analytics lags up to two days: show fresh uploads with the live public counters
+    fresh = [v for v in videos if v["id"] not in {r["video"] for r in rows}]
+    if fresh:
+        lines.append("Свежие (аналитика ещё не готова, счётчики YouTube):")
+    for v in fresh:
+        st = v.get("statistics", {})
+        lines.append(f"• {v['snippet']['title'][:60]} — {st.get('viewCount', '0')} просм., "
+                     f"лайки {st.get('likeCount', '0')}, комментарии {st.get('commentCount', '0')} — "
+                     f"youtu.be/{v['id']}")
     return "\n".join(lines)
 
 
