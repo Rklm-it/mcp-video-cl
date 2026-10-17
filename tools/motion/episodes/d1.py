@@ -1,158 +1,156 @@
-"""d1 · «Что такое DDoS-атака?» — топ-тема @aldoniq (42,5 тыс. лайков), наш разбор: ~18 с, хук с кадра 0.
+"""d1 · «Что такое DDoS-атака?» — топ-тема @aldoniq (42,5 тыс. лайков). ~15 с, одна живая схема на весь ролик:
+поле гаджетов заражается, бьёт в сервер, сервер ложится; в конце — «а среди них твой роутер?».
 
-Факты: рекорд — 31,4 Тбит/с, IV кв. 2025, ботнет Aisuru/Kimwolf (Cloudflare, отчёт за Q4 2025 и Threat Report
-2026); у четырёх ботнетов — не меньше 3 млн заражённых устройств: видеорегистраторы, веб-камеры, Wi-Fi-роутеры
-(Минюст США, 20.03.2026 — The Hacker News, SecurityWeek); Kimwolf — >2 млн неофициальных Android-ТВ-приставок
-(KrebsOnSecurity). 31,4 Тбит/с ≈ 3,9 ТБ/с ≈ 200 фильмов 4K по ~20 ГБ каждую секунду.
+v2 (17.10): первая версия вышла 27 с с замиранием кадра в конце сцен (голос длиннее клипов) и бедной картинкой.
+Теперь клипы длиннее голоса и всё время в движении, 4 короткие фразы.
+
+Факты: рекорд — 31,4 Тбит/с, IV кв. 2025, ботнет Aisuru/Kimwolf (Cloudflare, Threat Report 2026); у четырёх
+ботнетов — не меньше 3 млн заражённых устройств: видеорегистраторы, веб-камеры, Wi-Fi-роутеры, ТВ-приставки
+(Минюст США, 20.03.2026 — The Hacker News, SecurityWeek).
 """
 
 import math
+import random
 
-from episodes.n1 import source
 from motion import CARD, CYAN, GREEN, MUTED, NAVY, RED, WHITE, YELLOW, Canvas, ease, font, prog
 
-SERVER = (540, 820)
-# where requests fly from: a ring around the server, fixed so every frame draws the same swarm
-SOURCES = [(540 + 470 * math.cos(a), 820 + 330 * math.sin(a))
-           for a in (i * 2.39996 for i in range(64))]  # golden angle: spread evenly
+COLS, ROWS = 7, 5
+GRID_X0, GRID_Y0, STEP_X, STEP_Y = 120, 480, 140, 108
+SCALE = 1.45
+SERVER = (540, 1110)
+DEVICES = [(GRID_X0 + col * STEP_X, GRID_Y0 + row * STEP_Y, ("cam", "router", "tv")[(col + row) % 3])
+           for row in range(ROWS) for col in range(COLS)]
+ORDER = list(range(len(DEVICES)))
+random.Random(7).shuffle(ORDER)
+RANK = {dev: k / len(ORDER) for k, dev in enumerate(ORDER)}  # when each device gets infected, 0..1
+MINE = COLS + 3  # the router the last scene zooms into (kind cycles cam/router/tv by col+row)
 
 
-def server(c: Canvas, center, t, t0, load: float) -> None:
-    """Server rack: three units with lights; the lights go red as the load grows."""
-    p = prog(t, t0, 0.35)
-    if p <= 0:
-        return
-    cx, cy = center
+def device(d, x, y, kind, color, s=1.0) -> None:
+    if kind == "cam":
+        d.rounded_rectangle((x - 26 * s, y - 16 * s, x + 18 * s, y + 16 * s), radius=7 * s, fill=color)
+        d.ellipse((x - 14 * s, y - 9 * s, x + 4 * s, y + 9 * s), fill=NAVY)
+        d.polygon(((x + 18 * s, y - 8 * s), (x + 30 * s, y - 15 * s), (x + 30 * s, y + 15 * s),
+                   (x + 18 * s, y + 8 * s)), fill=color)
+    elif kind == "router":
+        d.rounded_rectangle((x - 30 * s, y - 2 * s, x + 30 * s, y + 18 * s), radius=6 * s, fill=color)
+        d.line((x - 20 * s, y - 2 * s, x - 27 * s, y - 24 * s), fill=color, width=max(2, int(5 * s)))
+        d.line((x + 20 * s, y - 2 * s, x + 27 * s, y - 24 * s), fill=color, width=max(2, int(5 * s)))
+    else:
+        d.rounded_rectangle((x - 28 * s, y - 8 * s, x + 28 * s, y + 14 * s), radius=6 * s, fill=color)
+        d.ellipse((x + 14 * s, y - 1 * s, x + 20 * s, y + 5 * s), fill=NAVY)
+
+
+def field(c: Canvas, t: float, infected: float, firing: bool, dim: float = 1.0, mine: float = 0.0) -> None:
+    """All devices; `infected` 0..1 turns them red one by one, `firing` sends their requests into the server."""
     lay, d = c.layer()
+    for i, (x, y, kind) in enumerate(DEVICES):
+        bad = RANK[i] < infected
+        bob = 3 * math.sin(t * 3 + i)  # nothing on screen ever stands still
+        device(d, x, y + bob, kind, RED if bad else (70, 105, 180), SCALE)
+    c.put(lay, dim)
+    if firing:
+        lay, d = c.layer()
+        tx, ty = SERVER
+        for i, (x, y, _) in enumerate(DEVICES):
+            if RANK[i] >= infected:
+                continue
+            for k in range(2):
+                ph = (t * 1.4 + i * 0.173 + k * 0.5) % 1.0
+                px, py = x + (tx - x) * ph, y + 20 + (ty - y - 20) * ph
+                d.ellipse((px - 6, py - 6, px + 6, py + 6), fill=(255, 90, 120, 230))
+        c.put(lay, dim, glow=6)
+    if mine > 0:
+        x, y, kind = DEVICES[MINE]
+        lay, d = c.layer()
+        r = 66 + 8 * math.sin(t * 6)
+        d.ellipse((x - r, y - r + 5, x + r, y + r + 5), outline=YELLOW, width=7)
+        c.put(lay, mine, glow=12)
+        if mine >= 1:
+            c.pill((x, y - 105), "ТВОЙ РОУТЕР?", YELLOW, t, 0.0, size=40)
+
+
+def server(c: Canvas, t: float, load: float, dim: float = 1.0) -> None:
+    cx, cy = SERVER
+    shake = 6 * math.sin(t * 40) * max(0.0, load - 0.85) / 0.15 if load > 0.85 else 0.0
+    lay, d = c.layer()
+    hot = load > 0.85
     for i in range(3):
-        y = cy - 120 + i * 84
-        d.rounded_rectangle((cx - 130, y, cx + 130, y + 70), radius=14, fill=CARD,
-                            outline=RED if load > 0.8 else CYAN, width=4)
+        y = cy - 70 + i * 54
+        d.rounded_rectangle((cx - 120 + shake, y, cx + 120 + shake, y + 46), radius=10, fill=CARD,
+                            outline=RED if hot else CYAN, width=4)
         for k in range(3):
-            d.ellipse((cx - 100 + k * 34, y + 25, cx - 80 + k * 34, y + 45),
-                      fill=RED if load > 0.5 + k * 0.15 else GREEN)
-        d.rounded_rectangle((cx + 20, y + 28, cx + 100, y + 42), radius=7, fill=(40, 60, 110))
-    c.put(lay, p, glow=10 if load > 0.8 else 0)
+            on = (math.sin(t * 9 + i * 2 + k) > 0) if not hot else True
+            d.ellipse((cx - 95 + k * 26 + shake, y + 16, cx - 81 + k * 26 + shake, y + 30),
+                      fill=RED if hot else (GREEN if on else (40, 80, 60)))
+    # load bar
+    x0, x1, yb = 300, 780, cy + 120
+    d.rounded_rectangle((x0, yb, x1, yb + 26), radius=13, fill=(30, 45, 90))
+    d.rounded_rectangle((x0, yb, x0 + max(26, (x1 - x0) * load), yb + 26), radius=13,
+                        fill=RED if hot else GREEN)
+    d.text((x1 + 20, yb + 13), f"{int(load * 100)}%", font=font("Manrope", 32, "ExtraBold"),
+           fill=RED if hot else WHITE, anchor="lm")
+    d.text((x0 - 20, yb + 13), "нагрузка", font=font("Manrope", 28, "Bold"), fill=MUTED, anchor="rm")
+    c.put(lay, dim, glow=10 if hot else 0)
 
 
-def swarm(c: Canvas, t, t0, count: int) -> None:
-    """Requests flying into the server from every side, more and more of them."""
-    if t < t0:
+def big_title(c: Canvas, lines, t: float, t0: float = 0.0) -> None:
+    """@aldoniq-style question: white / YELLOW BIGGER / white, full width."""
+    if c.bare:  # the cover draws its own question
         return
-    lay, d = c.layer()
-    tx, ty = SERVER
-    for i, (sx, sy) in enumerate(SOURCES[:count]):
-        if t - t0 < i * 0.02:
-            continue
-        ph = ((t - t0) * 0.9 + i * 0.137) % 1.0
-        x, y = sx + (tx - sx) * ph, sy + (ty - sy) * ph
-        d.ellipse((sx - 9, sy - 9, sx + 9, sy + 9), fill=(255, 77, 109, 160))
-        d.line((x - (tx - sx) * 0.05, y - (ty - sy) * 0.05, x, y), fill=(255, 120, 140, 200), width=4)
-        d.ellipse((x - 7, y - 7, x + 7, y + 7), fill=RED)
-    c.put(lay, glow=6)
+    y = 170
+    for i, line in enumerate(lines):
+        big = i == 1
+        size = 118 if big else 70
+        while font("Unbounded", size, "Black").getlength(line) > 960:
+            size -= 2
+        c.text((60, y), line, size, YELLOW if big else WHITE, "Unbounded", "Black", t, t0 + i * 0.12)
+        y += size + 12
 
 
 def hook(c: Canvas, t: float) -> None:
     c.header("КАК УСТРОЕН ИНТЕРНЕТ", t)
-    c.title("ЧТО ТАКОЕ", "DDOS-АТАКА?", t)
-    load = ease((t - 0.4) / 2.2)
-    swarm(c, t, 0.3, 12 + int(52 * load))
-    server(c, SERVER, t, 0.1, load)
-    v = 2000 + (2_000_000 - 2000) * load
-    c.text((540, 1215), f"{v:,.0f}".replace(",", " "), 72, RED if load > 0.8 else WHITE, "Unbounded", "Black", t,
-           0.2, anchor="mm", glow=10)
-    c.text((540, 1285), "запросов в секунду · сервер держит 2 000", 32, MUTED, "Manrope", "Bold", t, 0.3,
-           anchor="mm")
-    c.pill((540, 1030), "сервер лёг", RED, t, 2.6, size=44, text_color=WHITE)
+    big_title(c, ("ЧТО ТАКОЕ", "DDOS-АТАКА?"), t)
+    infected = 0.15 * ease((t - 1.5) / 2.0)
+    field(c, t, infected, firing=t > 1.5)
+    server(c, t, 0.05 + infected)
+
+
+def attack(c: Canvas, t: float) -> None:
+    c.header("КАК ЭТО РАБОТАЕТ", t)
+    c.title("МИЛЛИОНЫ ГАДЖЕТОВ", "БЬЮТ В ОДИН СЕРВЕР", t)
+    infected = 0.15 + 0.85 * ease(t / 3.2)
+    field(c, t, infected, firing=True)
+    load = min(1.0, 0.2 + 0.85 * ease((t - 0.3) / 3.0))
+    server(c, t, load)
+    c.pill((540, 1330), "СЕРВЕР ЛЁГ", RED, t, 3.3, size=48, text_color=WHITE)
 
 
 def record(c: Canvas, t: float) -> None:
-    c.header("РЕКОРД", t)
-    c.title("САМАЯ МОЩНАЯ", "АТАКА В ИСТОРИИ", t)
-    v = 31.4 * ease(t / 1.1)
-    c.text((540, 640), f"{v:.1f}".replace(".", ","), 190, RED, "Unbounded", "Black", t, 0.0, anchor="mm", glow=14)
-    c.text((540, 780), "терабита в секунду", 48, WHITE, "Manrope", "ExtraBold", t, 0.2, anchor="mm")
-    # films flying past: ~200 per second
-    lay, d = c.layer()
-    shown = int(40 * prog(t, 1.0, 1.2))
-    for i in range(shown):
-        col, row = i % 10, i // 10
-        x, y = 115 + col * 88, 870 + row * 70
-        d.rounded_rectangle((x, y, x + 70, y + 52), radius=8, fill=(40, 70, 140), outline=CYAN, width=2)
-        d.polygon(((x + 27, y + 14), (x + 27, y + 38), (x + 47, y + 26)), fill=WHITE)
-    c.put(lay)
-    c.pill((540, 1190), "≈ 200 фильмов в 4K — каждую секунду", YELLOW, t, 1.8, size=40)
-    source(c, t, "Cloudflare · IV квартал 2025")
-
-
-def gadget(c: Canvas, center, kind: str, label: str, t, t0) -> None:
-    p = c.card((center[0] - 140, center[1] - 150, center[0] + 140, center[1] + 150), t, t0, outline=(70, 95, 160))
-    if p <= 0:
-        return
-    cx, cy = center[0], center[1] - 30
-    lay, d = c.layer()
-    if kind == "camera":
-        d.rounded_rectangle((cx - 70, cy - 40, cx + 50, cy + 40), radius=16, fill=(60, 85, 150))
-        d.ellipse((cx - 40, cy - 25, cx + 10, cy + 25), fill=NAVY, outline=CYAN, width=5)
-        d.polygon(((cx + 50, cy - 20), (cx + 85, cy - 38), (cx + 85, cy + 38), (cx + 50, cy + 20)), fill=(60, 85, 150))
-    elif kind == "router":
-        d.rounded_rectangle((cx - 90, cy, cx + 90, cy + 50), radius=12, fill=(60, 85, 150))
-        for k in range(4):
-            d.ellipse((cx - 65 + k * 30, cy + 20, cx - 55 + k * 30, cy + 30), fill=GREEN)
-        d.line((cx - 60, cy, cx - 75, cy - 60), fill=(60, 85, 150), width=8)
-        d.line((cx + 60, cy, cx + 75, cy - 60), fill=(60, 85, 150), width=8)
-    else:  # tv box
-        d.rounded_rectangle((cx - 80, cy - 10, cx + 80, cy + 40), radius=14, fill=(60, 85, 150))
-        d.ellipse((cx + 50, cy + 10, cx + 62, cy + 22), fill=CYAN)
-        d.rounded_rectangle((cx - 30, cy - 70, cx + 10, cy - 20), radius=8, fill=(45, 65, 120))
-    d.text((cx, cy + 95), label, font=font("Manrope", 32, "ExtraBold"), fill=WHITE, anchor="mm")
-    c.put(lay, p)
-    c.pill((center[0], center[1] + 150), "БОТ", RED, t, t0 + 0.5, size=32, text_color=WHITE)
-
-
-def who(c: Canvas, t: float) -> None:
-    c.header("КТО СТРЕЛЯЛ", t)
-    c.title("НЕ ХАКЕРЫ, А", "3 000 000 ГАДЖЕТОВ", t)
-    gadget(c, (230, 640), "camera", "камеры", t, 0.2)
-    gadget(c, (540, 640), "router", "роутеры", t, 0.6)
-    gadget(c, (850, 640), "tv", "ТВ-приставки", t, 1.0)
-    c.text((540, 1000), "заражены — и хозяева не знают", 44, YELLOW, "Manrope", "ExtraBold", t, 1.6, anchor="mm")
-    source(c, t, "ботнеты Aisuru/Kimwolf · Минюст США, март 2026")
-
-
-def check(c: Canvas, y, label, t, t0) -> None:
-    c.card((90, y, 990, y + 130), t, t0, outline=(60, 85, 150))
-    c.text((150, y + 44), label, 40, WHITE, "Manrope", "ExtraBold", t, t0 + 0.05)
-    c.mark((920, y + 65), True, t, t0 + 0.4, r=36)
-
-
-def _loop(c: Canvas, t: float) -> None:
-    c.header("ПРОВЕРЬ СВОЙ", t)
-    c.title("ТВОЙ РОУТЕР", "ТОЖЕ МОЖЕТ СТРЕЛЯТЬ", t)
-    check(c, 480, "смени заводской пароль", t, 0.2)
-    check(c, 640, "обнови прошивку", t, 0.6)
-    check(c, 800, "приставки — известных марок", t, 1.0)
-
-
-def outro_instagram(c: Canvas, t: float) -> None:
-    _loop(c, t)
-    c.pill((540, 1040), "сохрани — проверишь дома", YELLOW, t, 1.5, size=44)
-
-
-def outro_youtube(c: Canvas, t: float) -> None:
-    _loop(c, t)
-    c.pill((540, 1040), "сохрани — проверишь дома", YELLOW, t, 1.5, size=44)
-    c.text((540, 1150), "подпишись — объясняю, как устроен интернет", 32, MUTED, "Manrope", "ExtraBold", t, 1.7,
+    c.header("РЕКОРД · CLOUDFLARE", t)
+    field(c, t, 1.0, firing=True, dim=0.25)
+    server(c, t, 1.0, dim=0.25)
+    v = 31.4 * ease(t / 1.0)
+    c.text((540, 640), f"{v:.1f}".replace(".", ","), 230, RED, "Unbounded", "Black", t, 0.0, anchor="mm", glow=16)
+    c.text((540, 800), "ТЕРАБИТ В СЕКУНДУ", 60, WHITE, "Unbounded", "Black", t, 0.15, anchor="mm")
+    c.text((540, 900), "самая мощная атака в истории · конец 2025", 34, MUTED, "Manrope", "ExtraBold", t, 0.4,
            anchor="mm")
 
 
+def yours(c: Canvas, t: float) -> None:
+    c.header("ПРОВЕРЬ СЕБЯ", t)
+    c.title("3 МИЛЛИОНА ИЗ НИХ —", "ДОМАШНИЕ ГАДЖЕТЫ", t)
+    field(c, t, 1.0, firing=True, dim=1.0, mine=prog(t, 0.8, 0.4))
+    server(c, t, 1.0)
+    c.pill((540, 1330), "смени заводской пароль", YELLOW, t, 2.4, size=46)
+
+
 # обложка (первый кадр и PNG для «Обложка → из фотоплёнки»): хук вопросом, как у @aldoniq
-COVER = ("ЧТО ТАКОЕ", "DDOS-АТАКА?", "И ПРИ ЧЁМ ТУТ РОУТЕР")
+COVER = ("ЧТО ТАКОЕ", "DDOS-АТАКА?", "И ПРИ ЧЁМ ТУТ ТВОЙ РОУТЕР")
 
 SCENES = {
-    "d1_01hot": (hook, 6.0, 0.8),
-    "d1_02": (record, 5.5, 0.2),
-    "d1_03": (who, 6.0, 0.2),
-    "d1_04ig": (outro_instagram, 6.0, 0.2),
-    "d1_04yt": (outro_youtube, 7.0, 0.2),
+    "d1_01hot": (hook, 5.0, 0.6),
+    "d1_02": (attack, 7.0),
+    "d1_03": (record, 5.0),
+    "d1_04": (yours, 7.0),
 }
