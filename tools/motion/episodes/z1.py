@@ -147,6 +147,56 @@ def bomb(c: Canvas, t: float) -> None:
     c.pill((540, 1300), "ДИСК ЗАПОЛНЕН", RED, t, 2.9, size=42, text_color=WHITE)
 
 
+DOCX_FILES = ("[Content_Types].xml", "word/document.xml", "word/styles.xml", "word/media/image1.png",
+              "docProps/core.xml")
+
+
+def docx(c: Canvas, t: float) -> None:
+    c.header("ФАКТ", t)
+    c.title("ТВОЙ .DOCX —", "ЭТО ТОЖЕ ZIP", t)
+    renamed = t >= 1.6
+    lay, d = c.layer()
+    p = prog(t, 0.2, 0.4)
+    d.rounded_rectangle((120, 470, 240, 620), radius=12, fill=(225, 232, 250))
+    d.rounded_rectangle((140, 560, 220, 595), radius=6, fill=(180, 140, 40) if renamed else (45, 110, 220))
+    d.text((180, 578), "ZIP" if renamed else "W", font=font("Manrope", 24, "ExtraBold"), fill=WHITE, anchor="mm")
+    name = "отчёт.zip" if renamed else "отчёт.docx"
+    # the extension is retyped letter by letter
+    if 1.0 <= t < 1.6:
+        k = int((t - 1.0) / 0.6 * 4)
+        name = "отчёт." + ("docx"[:4 - k] if k < 4 else "")
+    d.text((280, 545), name, font=font("Unbounded", 60, "Black"), fill=YELLOW if renamed else WHITE, anchor="lm")
+    c.put(lay, p)
+    if renamed:
+        c.card((90, 680, 990, 1120), t, 1.9, outline=(70, 95, 160))
+        c.text((140, 715), "внутри:", 32, MUTED, "Manrope", "Bold", t, 2.0)
+        for i, f in enumerate(DOCX_FILES):
+            c.text((140, 775 + i * 64), "· " + f, 38, WHITE, "Manrope", "ExtraBold", t, 2.1 + i * 0.2)
+    c.pill((540, 1220), "переименуй и открой", YELLOW, t, 3.4, size=44)
+
+
+def nest(c: Canvas, t: float) -> None:
+    c.header("КАК УСТРОЕНА БОМБА", t)
+    c.title("16 АРХИВОВ,", "В КАЖДОМ ЕЩЁ 16", t)
+    lvl = min(5, int(max(0.0, t - 0.4) / 0.7) + 1)
+    lay, d = c.layer()
+    # each level: a row of 16 boxes, smaller and denser — a tree that explodes downwards
+    for L in range(lvl):
+        y = 480 + L * 110
+        n = 16
+        w = 820 / n
+        for k in range(n):
+            x = 90 + k * w
+            col = (180, 140, 40) if L < 4 else RED
+            d.rounded_rectangle((x + 3, y, x + w - 3, y + 70), radius=6, fill=col)
+        d.text((990, y + 35), "×16", font=font("Manrope", 30, "ExtraBold"), fill=WHITE, anchor="rm")
+    c.put(lay, glow=6)
+    if lvl >= 5:
+        c.text((540, 1090), "1 048 576 файлов", 66, WHITE, "Unbounded", "Black", t, 3.4, anchor="mm")
+        c.text((540, 1180), "по 4,3 ГБ = 4,5 ПБ", 66, RED, "Unbounded", "Black", t, 3.7, anchor="mm", glow=12)
+        c.pill((540, 1300), "сохрани — пригодится", YELLOW, t, 4.4, size=42)
+
+
 # обложка (первый кадр и PNG для «Обложка → из фотоплёнки»): хук вопросом, как у @aldoniq
 COVER = ("КАК ФАЙЛЫ", "СЖИМАЮТСЯ?", "И ПОЧЕМУ ФОТО — НЕТ")
 
@@ -155,5 +205,7 @@ SCENES = {
     "z1_02": (repeats, 8.0),
     "z1_03": (codes, 7.0),
     "z1_04": (photo, 7.0),
-    "z1_05": (bomb, 8.0),
+    "z1_05": (docx, 8.0),
+    "z1_06": (bomb, 8.0),
+    "z1_07": (nest, 9.0),
 }
