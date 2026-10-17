@@ -140,6 +140,9 @@ def outro_instagram(c: Canvas, t: float) -> None:
            anchor="mm")
 
 
+# обложка (первый кадр и PNG для «Обложка → из фотоплёнки»): хук вопросом, как у @aldoniq
+COVER = ("КАК ТЕБЯ", "ОТРЕЗАЮТ", "ОТ TELEGRAM?")
+
 SCENES = {
     "t1_01": (hook, 7.0),
     "t1_02": (timeline, 8.0),

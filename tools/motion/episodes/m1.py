@@ -113,6 +113,9 @@ def outro_instagram(c: Canvas, t: float) -> None:
            anchor="mm")
 
 
+# обложка (первый кадр и PNG для «Обложка → из фотоплёнки»): хук вопросом, как у @aldoniq
+COVER = ("ЗАЧЕМ ТЕБЯ", "ПЕРЕСАЖИВАЮТ", "В MAX?")
+
 SCENES = {
     "m1_01": (hook, 5.0),
     "m1_02": (step_phone, 7.0),
