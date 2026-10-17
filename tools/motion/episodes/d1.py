@@ -2,7 +2,8 @@
 поле гаджетов заражается, бьёт в сервер, сервер ложится; в конце — «а среди них твой роутер?».
 
 v2 (17.10): первая версия вышла 27 с с замиранием кадра в конце сцен (голос длиннее клипов) и бедной картинкой.
-Теперь клипы длиннее голоса и всё время в движении, 4 короткие фразы.
+Теперь клипы длиннее голоса и всё время в движении. v3: 13,7 с — «слишком коротко» (владелец), добавлены сцены
+«как гаджет становится ботом» и «как спасаются сайты» — ~25 с.
 
 Факты: рекорд — 31,4 Тбит/с, IV кв. 2025, ботнет Aisuru/Kimwolf (Cloudflare, Threat Report 2026); у четырёх
 ботнетов — не меньше 3 млн заражённых устройств: видеорегистраторы, веб-камеры, Wi-Fi-роутеры, ТВ-приставки
@@ -41,8 +42,10 @@ def device(d, x, y, kind, color, s=1.0) -> None:
         d.ellipse((x + 14 * s, y - 1 * s, x + 20 * s, y + 5 * s), fill=NAVY)
 
 
-def field(c: Canvas, t: float, infected: float, firing: bool, dim: float = 1.0, mine: float = 0.0) -> None:
-    """All devices; `infected` 0..1 turns them red one by one, `firing` sends their requests into the server."""
+def field(c: Canvas, t: float, infected: float, firing: bool, dim: float = 1.0, mine: float = 0.0,
+          wall: float | None = None) -> None:
+    """All devices; `infected` 0..1 turns them red one by one, `firing` sends their requests into the server;
+    with `wall` (a y) the requests die on the filter line instead of reaching the server."""
     lay, d = c.layer()
     for i, (x, y, kind) in enumerate(DEVICES):
         bad = RANK[i] < infected
@@ -58,6 +61,8 @@ def field(c: Canvas, t: float, infected: float, firing: bool, dim: float = 1.0, 
             for k in range(2):
                 ph = (t * 1.4 + i * 0.173 + k * 0.5) % 1.0
                 px, py = x + (tx - x) * ph, y + 20 + (ty - y - 20) * ph
+                if wall is not None and py > wall:
+                    continue
                 d.ellipse((px - 6, py - 6, px + 6, py + 6), fill=(255, 90, 120, 230))
         c.put(lay, dim, glow=6)
     if mine > 0:
@@ -137,6 +142,53 @@ def record(c: Canvas, t: float) -> None:
            anchor="mm")
 
 
+TRIES = (("123456", False), ("password", False), ("admin", True))
+
+
+def infect(c: Canvas, t: float) -> None:
+    c.header("КАК ЗАРАЖАЮТ", t)
+    c.title("КАК ГАДЖЕТ", "СТАНОВИТСЯ БОТОМ", t)
+    won = 0.6 + 1.4 * (len(TRIES) - 1) + 0.8
+    lay, d = c.layer()
+    device(d, 540, 590 + 4 * math.sin(t * 3), "router", RED if t >= won else (70, 105, 180), 4.2)
+    c.put(lay, prog(t, 0.1, 0.4), glow=14 if t >= won else 0)
+    c.card((140, 780, 940, 1110), t, 0.2, outline=(70, 95, 160))
+    c.text((190, 815), "вход в роутер", 32, MUTED, "Manrope", "Bold", t, 0.3)
+    c.text((190, 880), "логин:   admin", 50, WHITE, "Manrope", "ExtraBold", t, 0.35)
+    k = max(0, min(len(TRIES) - 1, int((t - 0.6) // 1.4)))
+    word, ok = TRIES[k]
+    local = t - 0.6 - 1.4 * k
+    typed = word[:max(0, int(len(word) * min(1.0, local / 0.7)))] if t >= 0.6 else ""
+    cursor = "|" if math.sin(t * 12) > 0 and local < 0.8 else ""
+    c.text((190, 960), f"пароль:  {typed}{cursor}", 50, WHITE, "Manrope", "ExtraBold", t, 0.4)
+    if local >= 0.8 and t >= 0.6:
+        c.mark((860, 990), ok, t, 0.6 + 1.4 * k + 0.8, r=40)
+    c.text((540, 1170), "вирус перебирает заводские пароли", 36, YELLOW, "Manrope", "ExtraBold", t, 0.5,
+           anchor="mm")
+    c.pill((540, 1300), "ВЗЛОМАН — ТЕПЕРЬ ЭТО БОТ", RED, t, won + 0.2, size=44, text_color=WHITE)
+
+
+WALL = 990
+
+
+def shield(c: Canvas, t: float) -> None:
+    c.header("ЗАЩИТА", t)
+    c.title("КАК СПАСАЮТСЯ", "САЙТЫ", t)
+    up = prog(t, 0.6, 0.5)
+    field(c, t, 1.0, firing=True, wall=WALL if up >= 1 else None)
+    lay, d = c.layer()
+    d.rounded_rectangle((90, WALL - 12, 90 + 900 * up, WALL + 12), radius=12, fill=CYAN)
+    if up >= 1:
+        rnd = random.Random(int(t * 20))
+        for _ in range(10):  # sparks where the junk hits the filter
+            x = rnd.uniform(140, 940)
+            d.ellipse((x - 9, WALL - 30, x + 9, WALL - 12), fill=(255, 150, 170))
+    c.put(lay, glow=14)
+    c.pill((540, WALL), "ФИЛЬТР", CYAN, t, 1.0, size=36)
+    server(c, t, 1.0 - 0.85 * ease((t - 1.2) / 1.5))
+    c.pill((540, 1330), "мусор отсеян до сервера", GREEN, t, 2.6, size=44)
+
+
 def yours(c: Canvas, t: float) -> None:
     c.header("ПРОВЕРЬ СЕБЯ", t)
     c.title("3 МИЛЛИОНА ИЗ НИХ —", "ДОМАШНИЕ ГАДЖЕТЫ", t)
@@ -152,5 +204,7 @@ SCENES = {
     "d1_01hot": (hook, 5.0, 0.6),
     "d1_02": (attack, 7.0),
     "d1_03": (record, 5.0),
-    "d1_04": (yours, 7.0),
+    "d1_04": (infect, 9.0),
+    "d1_05": (shield, 7.0),
+    "d1_06": (yours, 7.0),
 }
