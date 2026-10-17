@@ -2,12 +2,26 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..config import _env, _env_bool, _env_float, _env_int, settings
 
 DEFAULT_FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+
+
+def _env_json(name: str) -> dict:
+    raw = _env(name)
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"{name} is not valid JSON: {exc}") from exc
+    if not isinstance(value, dict):
+        raise SystemExit(f"{name} must be a JSON object: {{\"brand\": {{...}}}}")
+    return value
 
 
 
@@ -100,6 +114,20 @@ class ReelsSettings:
     # 0 = the YouTube credentials are only for analytics (youtube_stats), never upload
     yt_upload: bool = field(default_factory=lambda: _env("REELS_YT_UPLOAD", "1") != "0")
 
+    # Instagram (Instagram API with Instagram Login, professional account): user id + long-lived token.
+    # The server refreshes the token itself (it lives 60 days) and keeps the fresh one in /data/reels.
+    ig_user_id: str = field(default_factory=lambda: _env("REELS_IG_USER_ID"))
+    ig_token: str = field(default_factory=lambda: _env("REELS_IG_TOKEN"))
+    ig_api: str = field(default_factory=lambda: _env("REELS_IG_API", "https://graph.instagram.com").rstrip("/"))
+    # Instagram downloads the video itself: the server's public address (https://<DOMAIN>), the file goes
+    # out under a signed path that cannot be guessed
+    public_url: str = field(default_factory=lambda: _env("REELS_PUBLIC_URL").rstrip("/"))
+
+    # Other channels made by the same factory, JSON by brand name, e.g.
+    # {"news": {"title": "Ну и новости", "tg_channel": "@nuinovosti", "ig_user_id": "…", "ig_token": "…",
+    #           "youtube": false}}. A reel created with brand="news" is published only there.
+    brands: dict = field(default_factory=lambda: _env_json("REELS_BRANDS"))
+
     def __post_init__(self) -> None:
         if self.max_animated <= 0:
             self.max_animated = 8 if self.animate_all else 2
@@ -126,12 +154,29 @@ class ReelsSettings:
         return sorted(p for p in Path(self.music_dir).iterdir()
                       if p.suffix.lower() in (".mp3", ".m4a", ".wav", ".ogg", ".aac"))
 
-    def publish_targets(self) -> list[str]:
+    def brand(self, name: str = "") -> dict:
+        """Where a reel of this brand goes: tg_channel, ig_user_id, ig_token, youtube, title.
+        "" is the main channel (the REELS_TG_* / REELS_IG_* / REELS_YT_* settings)."""
+        if not name:
+            return {"title": "", "tg_channel": self.tg_channel, "ig_user_id": self.ig_user_id,
+                    "ig_token": self.ig_token, "youtube": True}
+        if name not in self.brands:
+            raise ValueError(f"Unknown brand {name!r}; configured: {', '.join(self.brands) or 'none'} (REELS_BRANDS)")
+        b = self.brands[name]
+        return {"title": b.get("title", name), "tg_channel": b.get("tg_channel", ""),
+                "ig_user_id": str(b.get("ig_user_id", "")), "ig_token": b.get("ig_token", ""),
+                "youtube": bool(b.get("youtube", False))}
+
+    def publish_targets(self, brand: str = "") -> list[str]:
+        b = self.brand(brand)
         targets = []
-        if self.tg_token and self.tg_channel:
+        if self.tg_token and b["tg_channel"]:
             targets.append("telegram")
-        if self.yt_upload and self.yt_client_id and self.yt_client_secret and self.yt_refresh_token:
+        if (b["youtube"] and self.yt_upload and self.yt_client_id and self.yt_client_secret
+                and self.yt_refresh_token):
             targets.append("youtube")
+        if b["ig_user_id"] and b["ig_token"] and self.public_url:
+            targets.append("instagram")
         return targets
 
 
