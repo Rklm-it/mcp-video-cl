@@ -41,6 +41,7 @@ class SceneOut:
     words: list[tts.Word]
     duration: float = 0.0
     start: float = 0.0  # where to start inside a video clip (Gemini can return a continued clip)
+    fit: str = "crop"  # video wider than 9:16: crop = fill the screen, blur = whole frame on a blurred copy
 
 
 def _ff(*args: str) -> None:
@@ -138,8 +139,9 @@ def _with_setting(job: dict) -> bool:
 def _prepare_scene(job: dict, i: int, workdir: Path) -> SceneOut:
     scene = job["scenes"][i]
     stem = workdir / f"scene{i:02d}"
+    media_start = float(scene.get("media_start") or 0)
     if scene.get("media"):
-        visual, kind = images.fetch_media(scene["media"], stem)
+        visual, kind, media_start = images.fetch_media(scene["media"], stem, media_start)
     else:
         png = stem.with_suffix(".png")
         if not png.exists():  # keep pictures when a reel is re-rendered
@@ -148,8 +150,8 @@ def _prepare_scene(job: dict, i: int, workdir: Path) -> SceneOut:
         visual, kind = png, "image"
     audio = stem.with_suffix(".mp3")
     words = tts.synthesize(scene["text"], audio)
-    start = float(scene.get("media_start") or 0) if kind == "video" else 0.0
-    return SceneOut(visual, kind, audio, words, start=start)
+    start = media_start if kind == "video" else 0.0
+    return SceneOut(visual, kind, audio, words, start=start, fit=scene.get("fit") or "crop")
 
 
 def _animate_scene(job: dict, i: int, o: SceneOut, workdir: Path) -> Path | None:
@@ -196,9 +198,15 @@ def _scene_clip(o: SceneOut, index: int, workdir: Path) -> Path:
     if o.kind == "video":
         # clips shorter than the scene hold their last frame
         seek = ["-ss", f"{o.start:.3f}"] if o.start > 0 else []
-        _ff(*seek, "-i", str(o.visual),
-            "-vf", f"scale={images.W}:{images.H}:force_original_aspect_ratio=increase,"
-                   f"crop={images.W}:{images.H},fps={FPS},setsar=1,tpad=stop_mode=clone:stop_duration=60",
+        W, H = images.W, images.H
+        tail = f"fps={FPS},setsar=1,tpad=stop_mode=clone:stop_duration=60"
+        if o.fit == "blur":  # someone's wide video: all of it in the middle, its blurred copy behind
+            graph = (f"[0:v]split[a][b];[a]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},"
+                     f"boxblur=24:2,eq=brightness=-0.08[bg];[b]scale={W}:-2[fg];"
+                     f"[bg][fg]overlay=(W-w)/2:(H-h)/2,{tail}")
+        else:
+            graph = f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},{tail}"
+        _ff(*seek, "-i", str(o.visual), "-vf" if o.fit != "blur" else "-filter_complex", graph,
             *common, str(out))
     else:
         frames = max(1, round(o.duration * FPS))

@@ -49,8 +49,9 @@ PUBLISH = ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHin
 class Scene(BaseModel):
     text: str = Field(description="What the voice says in this scene (Russian), 1-2 short sentences")
     image_prompt: str = Field("", description="English picture prompt; no text/letters in the picture")
-    media: str | None = Field(None, description="Instead of generating: image/video URL or a file name "
-                                                "in the server's video folder (e.g. a clip made in Veo/Kling)")
+    media: str | None = Field(None, description="Instead of generating: image/video URL, a video page "
+                                                "(YouTube, VK, X, TikTok… — the piece from media_start is cut "
+                                                "without its sound) or a file name in the server's video folder")
     offer: bool = Field(False, description="Show the offer banner during this scene")
     media_start: float = Field(0, ge=0, description="Start the media video clip at this second "
                                                     "(e.g. skip a repeated beginning of a continued clip)")
@@ -58,6 +59,9 @@ class Scene(BaseModel):
                                        "like «DPI»), 1-3 words; the picture itself stays without text")
     animate: bool | None = Field(None, description="Turn the picture into a short AI video (paid). "
                                                    "Default: REELS_ANIMATE_ALL decides")
+    fit: Literal["crop", "blur"] = Field("crop", description="A wide video in media: crop = the centre fills "
+                                                             "the screen; blur = the whole frame in the middle "
+                                                             "on its blurred copy (news footage, cars, people)")
 
 
 class SceneEdit(BaseModel):
@@ -69,6 +73,7 @@ class SceneEdit(BaseModel):
     animate: bool | None = None
     label: str | None = None
     media_start: float | None = Field(None, ge=0)
+    fit: Literal["crop", "blur"] | None = None
 
 
 _registered = False
@@ -264,11 +269,11 @@ def register(mcp: FastMCP, run) -> None:
             if not 0 <= ch.index < len(job["scenes"]):
                 raise ValueError(f"No scene {ch.index}")
             scene = job["scenes"][ch.index]
-            for key in ("text", "image_prompt", "media", "offer", "animate", "label", "media_start"):
+            for key in ("text", "image_prompt", "media", "offer", "animate", "label", "media_start", "fit"):
                 value = getattr(ch, key)
                 if value is not None:
                     scene[key] = value
-            if ch.image_prompt is not None or ch.media is not None:
+            if ch.image_prompt is not None or ch.media is not None or ch.media_start is not None:
                 for old in workdir.glob(f"scene{ch.index:02d}.*"):
                     old.unlink()
         if title is not None:

@@ -131,6 +131,33 @@ async def test_unknown_offer_is_rejected():
     assert res.isError and "Unknown offer" in res.content[0].text
 
 
+async def test_news_footage_from_a_video_page_is_cut_muted_and_blurred(video_dir, monkeypatch):
+    from PIL import Image
+    from video_mcp import sources as src_mod
+
+    page = "https://www.youtube.com/watch?v=tesla000001"
+    asked = []
+    monkeypatch.setattr(src_mod, "resolve", lambda raw: asked.append(raw) or raw)
+    # the page's video: 640x360 wide, red 0-4 s, lime 4-8 s, blue 8-12 s, with its own sound
+    monkeypatch.setattr(src_mod, "get_video_file", lambda src, start, end: (video_dir / "colors.mp4", 0.0))
+    res = await call("create_reel", background=False, title="Новость", music="none", setting="none", scenes=[
+        {"text": "Смотри.", "media": page, "media_start": 4.5, "fit": "blur"}])
+    assert not res.isError, res.content[0].text
+    assert asked == [page]
+    workdir = jobs.job_dir(res.content[0].text.split()[1])
+    cut = workdir / "scene00.cut.mp4"
+    assert [s["codec_type"] for s in probe(cut)["streams"]] == ["video"]  # their sound is gone
+    frame = workdir / "f.png"
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", "0.2", "-i",
+                    str(workdir / "reel.mp4"), "-frames:v", "1", str(frame)], check=True)
+    img = Image.open(frame).convert("RGB")
+    r, g, b = img.getpixel((540, 960))
+    assert g > 150 and r < 100 and b < 100  # media_start=4.5 → the lime part, not the red start
+    r2, g2, b2 = img.getpixel((540, 200))
+    # above the wide frame: its darkened blurred copy — not black bars, and not the frame itself (crop)
+    assert 60 < g2 < g - 8 and g2 > r2 and g2 > b2
+
+
 async def test_scene_with_local_video_media(video_dir):
     res = await call("create_reel", background=False, title="Клип", scenes=[{"text": "Смотри внимательно.", "media": "colors.mp4"}])
     assert not res.isError, res.content[0].text
