@@ -9,7 +9,7 @@ import subprocess
 import zlib
 from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from PIL import ImageFont
@@ -42,6 +42,19 @@ class SceneOut:
     duration: float = 0.0
     start: float = 0.0  # where to start inside a video clip (Gemini can return a continued clip)
     fit: str = "crop"  # video wider than 9:16: crop = fill the screen, blur = whole frame on a blurred copy
+    shots: list[float] = field(default_factory=list)  # more moments of the same video: the scene is cut between them
+    zoom: bool = False  # slow push-in
+    slowmo: float = 1.0  # 0.5 = the video plays twice slower
+
+    @property
+    def starts(self) -> list[float]:
+        return [self.start, *self.shots] if self.kind == "video" else [0.0]
+
+    def segments(self) -> list[float]:
+        """Length of every shot: the scene's time split evenly, the last one takes the rounding."""
+        n = len(self.starts)
+        seg = self.duration / n
+        return [seg] * (n - 1) + [self.duration - seg * (n - 1)]
 
 
 def _ff(*args: str) -> None:
@@ -97,19 +110,47 @@ def render(job: dict, workdir: Path, offer: dict | None, progress: Callable[[flo
     final = workdir / "reel.mp4"
     inputs = ["-i", str(silent), "-i", str(voice)]
     graph = f"[0:v]{','.join(vf)}[v]"
-    audio_out = "1:a"
+    beds = []  # sound under the voice: [label] of each mixed-in track
+    n_in = 2  # inputs so far: 0 = picture, 1 = voice
     track = pick_music(job)
     if track:
         inputs += ["-stream_loop", "-1", "-i", str(track)]
         fade = max(0.0, total - 1.5)
-        graph += (f";[2:a]volume={reels_settings.music_volume},afade=t=in:d=0.5,afade=t=out:st={fade:.2f}:d=1.5[m]"
-                  ";[1:a][m]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a]")
+        graph += (f";[{n_in}:a]volume={reels_settings.music_volume},afade=t=in:d=0.5,"
+                  f"afade=t=out:st={fade:.2f}:d=1.5[m]")
+        beds.append("[m]")
+        n_in += 1
+    ambient = float(job.get("ambient") or 0)
+    leftovers = []
+    if ambient > 0:
+        progress(0.9, "Original sound under the voice")
+        parts = [_scene_ambient(o, i, workdir) for i, o in enumerate(outs)]
+        lst = workdir / "amb.txt"
+        lst.write_text("".join(f"file '{p.name}'\n" for p in parts))
+        amb = workdir / "ambient.wav"
+        _ff("-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(amb))
+        leftovers += [*parts, lst, amb]
+        inputs += ["-i", str(amb)]
+        graph += f";[{n_in}:a]volume={ambient:.3f}[amb]"
+        beds.append("[amb]")
+        n_in += 1
+    sfx = _whoosh_track(cut_times(outs), total, workdir) if job.get("whoosh") else None
+    if sfx:
+        leftovers.append(sfx)
+        inputs += ["-i", str(sfx)]
+        graph += f";[{n_in}:a]anull[sfx]"
+        beds.append("[sfx]")
+        n_in += 1
+    audio_out = "1:a"
+    if beds:
+        graph += (f";[1:a]{''.join(beds)}amix=inputs={len(beds) + 1}:duration=first:dropout_transition=0"
+                  ":normalize=0[a]")
         audio_out = "[a]"
     _ff(*inputs, "-filter_complex", graph, "-map", "[v]", "-map", audio_out,
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "160k", "-ar", "44100", "-t", f"{total:.3f}", "-movflags", "+faststart",
         str(final))
-    for leftover in (*clips, silent, concat):
+    for leftover in (*clips, silent, concat, *leftovers):
         leftover.unlink(missing_ok=True)
     return final
 
@@ -140,8 +181,12 @@ def _prepare_scene(job: dict, i: int, workdir: Path) -> SceneOut:
     scene = job["scenes"][i]
     stem = workdir / f"scene{i:02d}"
     media_start = float(scene.get("media_start") or 0)
+    shots = [float(x) for x in scene.get("shots") or []]
     if scene.get("media"):
-        visual, kind, media_start = images.fetch_media(scene["media"], stem, media_start)
+        # one cut from a page covers every shot; positions are then shifted into that file
+        lo, hi = min([media_start, *shots]), max([media_start, *shots])
+        visual, kind, file_lo = images.fetch_media(scene["media"], stem, lo, hi - lo + images.PAGE_CUT_SECONDS)
+        media_start, shots = media_start + file_lo - lo, [x + file_lo - lo for x in shots]
     else:
         png = stem.with_suffix(".png")
         if not png.exists():  # keep pictures when a reel is re-rendered
@@ -151,7 +196,9 @@ def _prepare_scene(job: dict, i: int, workdir: Path) -> SceneOut:
     audio = stem.with_suffix(".mp3")
     words = tts.synthesize(scene["text"], audio)
     start = media_start if kind == "video" else 0.0
-    return SceneOut(visual, kind, audio, words, start=start, fit=scene.get("fit") or "crop")
+    return SceneOut(visual, kind, audio, words, start=start, fit=scene.get("fit") or "crop",
+                    shots=shots if kind == "video" else [], zoom=bool(scene.get("zoom")),
+                    slowmo=float(scene.get("slowmo") or 1.0))
 
 
 def _animate_scene(job: dict, i: int, o: SceneOut, workdir: Path) -> Path | None:
@@ -191,30 +238,122 @@ def _join_voice(outs: list[SceneOut], workdir: Path) -> tuple[Path, list[tts.Wor
     return voice, words
 
 
+ZOOM = 0.14  # push-in: the frame grows by 14% over a shot
+
+
+def _video_graph(fit: str, slowmo: float, zoom: bool, frames: int) -> str:
+    """One shot of a video: slow-motion, fit into 9:16, hold the last frame if the source is short, push-in."""
+    W, H = images.W, images.H
+    speed = f"setpts=(PTS-STARTPTS)/{slowmo}," if slowmo != 1.0 else "setpts=PTS-STARTPTS,"
+    if fit == "blur":  # someone's wide video: all of it in the middle, its blurred copy behind
+        graph = (f"[0:v]{speed}split[a][b];[a]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},"
+                 f"boxblur=24:2,eq=brightness=-0.08[bg];[b]scale={W}:-2[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,")
+    else:
+        graph = f"[0:v]{speed}scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},"
+    graph += f"fps={FPS},tpad=stop_mode=clone:stop_duration=60,"
+    if zoom:
+        graph += (f"zoompan=z='1+{ZOOM}*on/{max(1, frames)}':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+                  f":s={W}x{H}:fps={FPS},")
+    return graph + "setsar=1"
+
+
 def _scene_clip(o: SceneOut, index: int, workdir: Path) -> Path:
     out = workdir / f"clip{index:02d}.mp4"
-    common = ["-t", f"{o.duration:.3f}", "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-              "-pix_fmt", "yuv420p", "-r", str(FPS)]
+    encode = ["-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-r", str(FPS)]
     if o.kind == "video":
-        # clips shorter than the scene hold their last frame
-        seek = ["-ss", f"{o.start:.3f}"] if o.start > 0 else []
-        W, H = images.W, images.H
-        tail = f"fps={FPS},setsar=1,tpad=stop_mode=clone:stop_duration=60"
-        if o.fit == "blur":  # someone's wide video: all of it in the middle, its blurred copy behind
-            graph = (f"[0:v]split[a][b];[a]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},"
-                     f"boxblur=24:2,eq=brightness=-0.08[bg];[b]scale={W}:-2[fg];"
-                     f"[bg][fg]overlay=(W-w)/2:(H-h)/2,{tail}")
+        parts = []
+        for j, (start, seg) in enumerate(zip(o.starts, o.segments())):
+            part = workdir / f"clip{index:02d}_{j}.mp4"
+            seek = ["-ss", f"{start:.3f}"] if start > 0 else []
+            _ff(*seek, "-t", f"{seg * o.slowmo + 1:.3f}", "-i", str(o.visual),
+                "-filter_complex", _video_graph(o.fit, o.slowmo, o.zoom, round(seg * FPS)),
+                "-t", f"{seg:.3f}", *encode, str(part))
+            parts.append(part)
+        if len(parts) == 1:
+            parts[0].replace(out)
         else:
-            graph = f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},{tail}"
-        _ff(*seek, "-i", str(o.visual), "-vf" if o.fit != "blur" else "-filter_complex", graph,
-            *common, str(out))
+            lst = workdir / f"clip{index:02d}.txt"
+            lst.write_text("".join(f"file '{p.name}'\n" for p in parts))
+            _ff("-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(out))
+            for p in (*parts, lst):
+                p.unlink(missing_ok=True)
     else:
         frames = max(1, round(o.duration * FPS))
         motion = _MOTIONS[index % len(_MOTIONS)].format(frames=frames)
+        if o.zoom:
+            motion = _MOTIONS[0]
         _ff("-loop", "1", "-framerate", str(FPS), "-i", str(o.visual),
             "-vf", f"scale={images.W * 3 // 2}:{images.H * 3 // 2},"
                    f"zoompan={motion}:d=1:s={images.W}x{images.H}:fps={FPS},setsar=1",
-            *common, str(out))
+            "-t", f"{o.duration:.3f}", *encode, str(out))
+    return out
+
+
+def _has_audio(path: Path) -> bool:
+    proc = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=index",
+                           "-of", "csv=p=0", str(path)], capture_output=True, text=True)
+    return bool(proc.stdout.strip())
+
+
+def _atempo(speed: float) -> str:
+    """atempo takes 0.5..2 per filter: chain them for stronger slow-motion."""
+    steps = []
+    while speed < 0.5:
+        steps.append("atempo=0.5")
+        speed /= 0.5
+    return ",".join(steps + [f"atempo={speed:.4f}"])
+
+
+def _scene_ambient(o: SceneOut, index: int, workdir: Path) -> Path:
+    """The scene's original sound, cut exactly like its shots (silence for pictures and silent videos)."""
+    out = workdir / f"amb{index:02d}.wav"
+    fmt = ["-ar", "44100", "-ac", "1"]
+    if o.kind != "video" or not _has_audio(o.visual):
+        _ff("-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono", "-t", f"{o.duration:.3f}", *fmt, str(out))
+        return out
+    parts = []
+    for j, (start, seg) in enumerate(zip(o.starts, o.segments())):
+        part = workdir / f"amb{index:02d}_{j}.wav"
+        seek = ["-ss", f"{start:.3f}"] if start > 0 else []
+        tempo = f"{_atempo(o.slowmo)}," if o.slowmo != 1.0 else ""
+        _ff(*seek, "-t", f"{seg * o.slowmo + 1:.3f}", "-i", str(o.visual), "-vn",
+            "-af", f"{tempo}apad,atrim=0:{seg:.3f}", *fmt, str(part))
+        parts.append(part)
+    lst = workdir / f"amb{index:02d}.txt"
+    lst.write_text("".join(f"file '{p.name}'\n" for p in parts))
+    _ff("-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(out))
+    for p in (*parts, lst):
+        p.unlink(missing_ok=True)
+    return out
+
+
+WHOOSH_LEAD = 0.15  # the whoosh starts a little before the cut and peaks on it
+
+
+def cut_times(outs: list[SceneOut]) -> list[float]:
+    """Moments where the picture changes: between shots and between scenes (not at 0)."""
+    times, t = [], 0.0
+    for o in outs:
+        for seg in o.segments():
+            t += seg
+            times.append(t)
+    return [round(x, 3) for x in times[:-1]]
+
+
+def _whoosh_track(times: list[float], total: float, workdir: Path) -> Path | None:
+    """A synthesized whoosh (filtered noise with a fast rise and fall) on every cut — no sound library needed."""
+    if not times:
+        return None
+    out = workdir / "sfx.wav"
+    n = len(times)
+    whoosh = ("anoisesrc=d=0.4:c=pink:a=0.6:r=44100,highpass=f=400,lowpass=f=5000,"
+              "afade=t=in:d=0.15:curve=exp,afade=t=out:st=0.15:d=0.25,volume=0.5")
+    graph = f"{whoosh},asplit={n}" + "".join(f"[w{i}]" for i in range(n)) + ";"
+    for i, t in enumerate(times):
+        ms = max(0, int((t - WHOOSH_LEAD) * 1000))
+        graph += f"[w{i}]adelay={ms}|{ms}[d{i}];"
+    graph += "".join(f"[d{i}]" for i in range(n)) + f"amix=inputs={n}:normalize=0,apad=whole_dur={total:.3f}"
+    _ff("-filter_complex", graph, "-t", f"{total:.3f}", "-ar", "44100", "-ac", "1", str(out))
     return out
 
 

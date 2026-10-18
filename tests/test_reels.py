@@ -1,6 +1,7 @@
 import io
 import json
 import subprocess
+from pathlib import Path
 
 import pytest
 from mcp.shared.memory import create_connected_server_and_client_session
@@ -145,8 +146,6 @@ async def test_news_footage_from_a_video_page_is_cut_muted_and_blurred(video_dir
     assert not res.isError, res.content[0].text
     assert asked == [page]
     workdir = jobs.job_dir(res.content[0].text.split()[1])
-    cut = workdir / "scene00.cut.mp4"
-    assert [s["codec_type"] for s in probe(cut)["streams"]] == ["video"]  # their sound is gone
     frame = workdir / "f.png"
     subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", "0.2", "-i",
                     str(workdir / "reel.mp4"), "-frames:v", "1", str(frame)], check=True)
@@ -156,6 +155,95 @@ async def test_news_footage_from_a_video_page_is_cut_muted_and_blurred(video_dir
     r2, g2, b2 = img.getpixel((540, 200))
     # above the wide frame: its darkened blurred copy — not black bars, and not the frame itself (crop)
     assert 60 < g2 < g - 8 and g2 > r2 and g2 > b2
+
+
+def band_db(path, freq, start=None, dur=None):
+    """RMS level (dB) of a narrow band around `freq` — tells the source's 440 Hz tone from the 300 Hz test voice."""
+    window = (["-ss", str(start)] if start is not None else []) + (["-t", str(dur)] if dur is not None else [])
+    out = subprocess.run(["ffmpeg", "-hide_banner", *window, "-i", str(path), "-af",
+                          f"bandpass=f={freq}:width_type=h:w=30,astats=measure_overall=RMS_level:measure_perchannel=0",
+                          "-f", "null", "-"], capture_output=True, text=True).stderr
+    levels = [line.split(":")[-1].strip() for line in out.splitlines() if "RMS level dB" in line]
+    return float(levels[-1]) if levels and levels[-1] not in ("-inf", "") else -200.0
+
+
+def frame_rgb(video, t, xy=(540, 960)):
+    from PIL import Image
+
+    out = video.with_name(f"f{t}.png")
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", str(t), "-i", str(video),
+                    "-frames:v", "1", str(out)], check=True)
+    return Image.open(out).convert("RGB").getpixel(xy)
+
+
+async def test_shots_cut_one_sentence_into_several_moments(video_dir):
+    # colors.mp4: red 0-4 s, lime 4-8 s, blue 8-12 s; the 1.45 s scene is split into three ~0.48 s shots
+    res = await call("create_reel", background=False, title="Нарезка", music="none", setting="none", scenes=[
+        {"text": "Смотри быстро.", "media": "colors.mp4", "media_start": 1, "shots": [5, 9], "zoom": True}])
+    assert not res.isError, res.content[0].text
+    reel = jobs.job_dir(res.content[0].text.split()[1]) / "reel.mp4"
+    colors = [frame_rgb(reel, t, (100, 960)) for t in (0.2, 0.7, 1.2)]
+    assert [max(range(3), key=c.__getitem__) for c in colors] == [0, 1, 2]  # red, then lime, then blue
+
+
+async def test_slowmo_stretches_the_moment(video_dir):
+    # 3.6 s is red, 0.4 s before lime: at normal speed the end of a 1.45 s scene is already lime
+    res = await call("create_reel", background=False, title="Замедление", music="none", setting="none", scenes=[
+        {"text": "Медленно.", "media": "colors.mp4", "media_start": 3.6, "slowmo": 0.25}])
+    assert not res.isError, res.content[0].text
+    r, g, b = frame_rgb(jobs.job_dir(res.content[0].text.split()[1]) / "reel.mp4", 1.3, (100, 960))
+    assert r > 150 and g < 100  # still red: 1.3 s of the reel is only 0.33 s of the source
+
+
+async def test_ambient_keeps_the_original_sound_under_the_voice(video_dir):
+    scenes = [{"text": "Слушай двигатель.", "media": "colors.mp4", "media_start": 1}]
+    loud = await call("create_reel", background=False, title="Звук", music="none", setting="none",
+                      ambient=0.5, scenes=scenes)
+    quiet = await call("create_reel", background=False, title="Звук", music="none", setting="none", scenes=scenes)
+    assert not loud.isError and not quiet.isError, loud.content[0].text
+    loud_db = band_db(jobs.job_dir(loud.content[0].text.split()[1]) / "reel.mp4", 440)
+    quiet_db = band_db(jobs.job_dir(quiet.content[0].text.split()[1]) / "reel.mp4", 440)
+    # the source's 440 Hz tone: clearly there with ambient, only the voice's leak into the band without it
+    assert loud_db > quiet_db + 12
+
+
+async def test_add_music_downloads_a_track_and_refuses_pages(tmp_path, monkeypatch):
+    import functools
+    import http.server
+    import threading
+
+    from video_mcp.config import settings
+
+    www = tmp_path / "www"
+    www.mkdir()
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                    "sine=frequency=500:duration=3", str(www / "beat.mp3")], check=True)
+    (www / "page.html").write_text("<html>not a track</html>")
+    server = http.server.ThreadingHTTPServer(
+        ("127.0.0.1", 0), functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(www)))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    monkeypatch.setattr(settings, "allow_private_urls", True)
+    monkeypatch.setattr(reels_settings, "music_dir", str(tmp_path / "music"))
+    try:
+        ok = await call("add_music", url=f"{base}/beat.mp3", track="hype-drive")
+        page = await call("add_music", url=f"{base}/page.html", track="page")
+        bad = await call("add_music", url=f"{base}/beat.mp3", track="../evil")
+    finally:
+        server.shutdown()
+    assert not ok.isError and "hype-drive.mp3 (3 s)" in ok.content[0].text, ok.content[0].text
+    assert page.isError and "web page" in page.content[0].text
+    assert bad.isError and "letters, digits" in bad.content[0].text
+    assert [t.name for t in reels_settings.music_tracks()] == ["hype-drive.mp3"]
+
+
+def test_whoosh_sits_on_the_cuts(tmp_path):
+    outs = [render.SceneOut(Path("a.mp4"), "video", Path("a.mp3"), [], duration=2.0, shots=[3.0]),
+            render.SceneOut(Path("b.png"), "image", Path("b.mp3"), [], duration=1.5)]
+    assert render.cut_times(outs) == [1.0, 2.0]  # inside the first scene and between the scenes
+    sfx = render._whoosh_track(render.cut_times(outs), 3.5, tmp_path)
+    assert abs(probe(sfx)["format"]["duration"] and float(probe(sfx)["format"]["duration"]) - 3.5) < 0.05
+    assert band_db(sfx, 2000, 0.85, 0.25) > band_db(sfx, 2000, 0.2, 0.25) + 20  # loud around 1.0 s, silent at 0.2
 
 
 async def test_scene_with_local_video_media(video_dir):
