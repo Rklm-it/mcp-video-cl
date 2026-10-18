@@ -49,8 +49,9 @@ PUBLISH = ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHin
 class Scene(BaseModel):
     text: str = Field(description="What the voice says in this scene (Russian), 1-2 short sentences")
     image_prompt: str = Field("", description="English picture prompt; no text/letters in the picture")
-    media: str | None = Field(None, description="Instead of generating: image/video URL or a file name "
-                                                "in the server's video folder (e.g. a clip made in Veo/Kling)")
+    media: str | None = Field(None, description="Instead of generating: image/video URL, a video page "
+                                                "(YouTube, VK, X, TikTok… — the piece from media_start is cut "
+                                                "without its sound) or a file name in the server's video folder")
     offer: bool = Field(False, description="Show the offer banner during this scene")
     media_start: float = Field(0, ge=0, description="Start the media video clip at this second "
                                                     "(e.g. skip a repeated beginning of a continued clip)")
@@ -58,6 +59,9 @@ class Scene(BaseModel):
                                        "like «DPI»), 1-3 words; the picture itself stays without text")
     animate: bool | None = Field(None, description="Turn the picture into a short AI video (paid). "
                                                    "Default: REELS_ANIMATE_ALL decides")
+    fit: Literal["crop", "blur"] = Field("crop", description="A wide video in media: crop = the centre fills "
+                                                             "the screen; blur = the whole frame in the middle "
+                                                             "on its blurred copy (news footage, cars, people)")
 
 
 class SceneEdit(BaseModel):
@@ -69,6 +73,7 @@ class SceneEdit(BaseModel):
     animate: bool | None = None
     label: str | None = None
     media_start: float | None = Field(None, ge=0)
+    fit: Literal["crop", "blur"] | None = None
 
 
 _registered = False
@@ -159,6 +164,8 @@ def register(mcp: FastMCP, run) -> None:
                                           if s.video in ("veo", "openai") else ""),
             f"Music tracks: {len(s.music_tracks())}" + (f" in {s.music_dir}" if s.music_dir else " (REELS_MUSIC_DIR not set)"),
             f"Publish targets: {', '.join(s.publish_targets()) or 'none configured'}",
+            *(f"Brand {name} ({b.get('title', name)}): {', '.join(s.publish_targets(name)) or 'none configured'}"
+              for name, b in s.brands.items()),
             f"Telegram review: {'on' if s.review_enabled else 'off'}",
             f"Reels: {counts or 'none yet'}",
             "Offers:" if offers else "Offers: none (add with save_offer)",
@@ -212,10 +219,14 @@ def register(mcp: FastMCP, run) -> None:
             Field(description="none = just render; review = send to the Telegram review chat; "
                               "publish = publish right away (only if the user asked for it)"),
         ] = "none",
+        brand: Annotated[str, Field(description="Which channel the reel is for: empty = the main one, or a "
+                                                "brand from REELS_BRANDS (see reels_setup), e.g. 'news'")] = "",
         ctx: Context | None = None,
     ) -> list[ContentBlock]:
         """Render a vertical reel (1080x1920): voice-over, animated pictures, subtitles and, for ad reels,
         the legal marking and offer banner. Returns the summary and preview frames. Takes 1-3 minutes."""
+        brand = brand.strip()
+        reels_settings.brand(brand)  # unknown brand → clear error before rendering
         items = [s.model_dump() for s in scenes]
         for s in items:
             s["animate"] = effective_animate(s)
@@ -231,7 +242,7 @@ def register(mcp: FastMCP, run) -> None:
         job = {
             "id": jobs.new_id(), "created": time.strftime("%Y-%m-%d %H:%M:%S"), "status": "rendering",
             "title": title.strip(), "description": description.strip(), "hashtags": hashtags or [],
-            "offer_id": offer_id, "scenes": items, "music": music, "setting": setting,
+            "offer_id": offer_id, "scenes": items, "music": music, "setting": setting, "brand": brand,
         }
         jobs.save(job)
         if background is None:
@@ -258,11 +269,11 @@ def register(mcp: FastMCP, run) -> None:
             if not 0 <= ch.index < len(job["scenes"]):
                 raise ValueError(f"No scene {ch.index}")
             scene = job["scenes"][ch.index]
-            for key in ("text", "image_prompt", "media", "offer", "animate", "label", "media_start"):
+            for key in ("text", "image_prompt", "media", "offer", "animate", "label", "media_start", "fit"):
                 value = getattr(ch, key)
                 if value is not None:
                     scene[key] = value
-            if ch.image_prompt is not None or ch.media is not None:
+            if ch.image_prompt is not None or ch.media is not None or ch.media_start is not None:
                 for old in workdir.glob(f"scene{ch.index:02d}.*"):
                     old.unlink()
         if title is not None:
@@ -288,6 +299,7 @@ def register(mcp: FastMCP, run) -> None:
         return "\n".join(
             f"{j['id']}  {j['status']:<9}  {j.get('duration', 0):>5.1f}s  {j['title']}"
             + (f"  [{j['offer_id']}]" if j.get("offer_id") else "")
+            + (f"  ({j['brand']})" if j.get("brand") else "")
             for j in items
         )
 
@@ -324,7 +336,7 @@ def register(mcp: FastMCP, run) -> None:
     @mcp.tool(annotations=PUBLISH, structured_output=False)
     async def publish_reel(
         job_id: str,
-        targets: Annotated[list[Literal["telegram", "youtube"]] | None,
+        targets: Annotated[list[Literal["telegram", "youtube", "instagram"]] | None,
                            Field(description="Default: all configured")] = None,
     ) -> str:
         """Publish a ready reel. Only after the user approved it. Repeating skips targets already done."""

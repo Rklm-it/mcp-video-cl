@@ -111,6 +111,9 @@ def outro_instagram(c: Canvas, t: float) -> None:
            anchor="mm")
 
 
+# обложка (первый кадр и PNG для «Обложка → из фотоплёнки»): хук вопросом, как у @aldoniq
+COVER = ("ПРАВДА, ЧТО", "VPN СТАНЕТ", "ПЛАТНЫМ?")
+
 SCENES = {
     "n2_01": (news, 8.0),
     "n2_02": (price, 8.0),

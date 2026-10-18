@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import logging
 import threading
@@ -10,6 +12,7 @@ from pathlib import Path
 
 import httpx
 
+from ..config import settings
 from . import jobs
 from .config import reels_settings
 
@@ -54,9 +57,11 @@ def publish(job_id: str, targets: list[str] | None = None) -> dict:
         if not video.is_file():
             raise PublishError(f"Reel {job_id} has no video file")
         offer = jobs.get_offer(job.get("offer_id"))
-        wanted = targets or reels_settings.publish_targets()
+        brand = reels_settings.brand(job.get("brand", ""))
+        wanted = targets or reels_settings.publish_targets(job.get("brand", ""))
         if not wanted:
-            raise PublishError("No publish targets configured (REELS_TG_* or REELS_YT_* in .env)")
+            raise PublishError("No publish targets configured (REELS_TG_*, REELS_YT_*, REELS_IG_* or "
+                               "REELS_BRANDS in .env)")
         done = job.setdefault("published", {})
         errors = {}
         for target in wanted:
@@ -64,11 +69,15 @@ def publish(job_id: str, targets: list[str] | None = None) -> dict:
                 continue
             try:
                 if target == "telegram":
-                    done[target] = _telegram_post(video, caption(job, offer, 1024))
+                    if not brand["tg_channel"]:
+                        raise PublishError("No Telegram channel for this brand")
+                    done[target] = _telegram_post(brand["tg_channel"], video, caption(job, offer, 1024))
                 elif target == "youtube":
                     done[target] = _youtube_upload(video, job, offer)
+                elif target == "instagram":
+                    done[target] = _instagram_post(job_id, brand, caption(job, offer, 2200, "ig"))
                 else:
-                    raise PublishError(f"Unknown target {target!r} (telegram, youtube)")
+                    raise PublishError(f"Unknown target {target!r} (telegram, youtube, instagram)")
             except Exception as exc:  # keep going with the other targets
                 log.warning("Publishing %s to %s failed: %s", job_id, target, exc)
                 errors[target] = str(exc)[:300]
@@ -98,8 +107,8 @@ def _send_video(chat: str, video: Path, text: str, markup: dict | None = None) -
         return _tg("sendVideo", data=data, files={"video": ("reel.mp4", f, "video/mp4")})
 
 
-def _telegram_post(video: Path, text: str) -> str:
-    msg = _send_video(reels_settings.tg_channel, video, text)
+def _telegram_post(channel: str, video: Path, text: str) -> str:
+    msg = _send_video(channel, video, text)
     chat = msg.get("chat", {})
     if chat.get("username"):
         return f"https://t.me/{chat['username']}/{msg['message_id']}"
@@ -155,13 +164,115 @@ def _youtube_upload(video: Path, job: dict, offer: dict | None) -> str:
     return f"https://youtube.com/shorts/{up.json()['id']}"
 
 
+# ---------------------------------------------------------------- Instagram
+
+
+def media_sig(job_id: str) -> str:
+    """Signature in the public video path: without it nobody can list or guess reel files."""
+    if not settings.token:
+        raise PublishError("Instagram needs VIDEO_MCP_TOKEN: it signs the public link to the video")
+    return hmac.new(settings.token.encode(), f"reel:{job_id}".encode(), hashlib.sha256).hexdigest()[:32]
+
+
+def media_url(job_id: str) -> str:
+    if not reels_settings.public_url:
+        raise PublishError("REELS_PUBLIC_URL is not set: Instagram downloads the video by link "
+                           "(https://<your domain>)")
+    return f"{reels_settings.public_url}/reels-media/{job_id}/{media_sig(job_id)}.mp4"
+
+
+def media_file(path: str) -> Path | None:
+    """The reel file behind a public /reels-media/<job>/<sig>.mp4 path, or None if the path is not valid."""
+    parts = path.strip("/").split("/")
+    if len(parts) != 3 or parts[0] != "reels-media" or not parts[2].endswith(".mp4"):
+        return None
+    job_id, sig = parts[1], parts[2][:-4]
+    try:
+        if not hmac.compare_digest(sig, media_sig(job_id)):
+            return None
+        video = jobs.job_dir(job_id) / "reel.mp4"
+    except (PublishError, jobs.JobError):
+        return None
+    return video if video.is_file() else None
+
+
+def _ig(method: str, path: str, **kwargs) -> dict:
+    resp = httpx.request(method, f"{reels_settings.ig_api}/{path}", timeout=60, **kwargs)
+    try:
+        data = resp.json()
+    except ValueError:
+        data = {}
+    if resp.status_code >= 400 or "error" in data:
+        err = data.get("error") or {}
+        raise PublishError(f"Instagram {path}: {err.get('message') or resp.text[:300]}")
+    return data
+
+
+IG_REFRESH_AFTER = 20 * 86400  # long-lived tokens live 60 days and can be refreshed once they are a day old
+
+
+def _ig_token(brand: dict) -> str:
+    """The freshest token for this account: refreshed every 20 days and kept in /data/reels/ig_tokens.json,
+    so the one written into .env once keeps working."""
+    store = reels_settings.root / "ig_tokens.json"
+    try:
+        saved = json.loads(store.read_text())
+    except (OSError, ValueError):
+        saved = {}
+    entry = saved.get(brand["ig_user_id"]) or {}
+    token = entry.get("token") or brand["ig_token"]
+    if time.time() - entry.get("refreshed", 0) < IG_REFRESH_AFTER:
+        return token
+    try:
+        fresh = _ig("GET", "refresh_access_token",
+                    params={"grant_type": "ig_refresh_token", "access_token": token})["access_token"]
+    except Exception as exc:  # the old token may still be valid: use it and try again next time
+        log.warning("Instagram token refresh failed: %s", exc)
+        return token
+    saved[brand["ig_user_id"]] = {"token": fresh, "refreshed": time.time()}
+    store.parent.mkdir(parents=True, exist_ok=True)
+    store.write_text(json.dumps(saved))
+    return fresh
+
+
+IG_POLL_SECONDS, IG_POLL_LIMIT = 5, 120  # Instagram processes a reel for up to ~10 minutes
+
+
+def _instagram_post(job_id: str, brand: dict, text: str) -> str:
+    """Reel via the official API: container from the public video link → wait until processed → publish."""
+    token = _ig_token(brand)
+    user = brand["ig_user_id"]
+    container = _ig("POST", f"{user}/media", data={
+        "media_type": "REELS", "video_url": media_url(job_id), "caption": text,
+        "share_to_feed": "true", "thumb_offset": "0", "access_token": token,
+    })["id"]
+    for _ in range(IG_POLL_LIMIT):
+        status = _ig("GET", container, params={"fields": "status_code,status", "access_token": token})
+        code = status.get("status_code")
+        if code == "FINISHED":
+            break
+        if code in ("ERROR", "EXPIRED"):
+            raise PublishError(f"Instagram could not process the video: {status.get('status') or code}")
+        time.sleep(IG_POLL_SECONDS)
+    else:
+        raise PublishError("Instagram is still processing the video after 10 minutes; publish again later")
+    media = _ig("POST", f"{user}/media_publish", data={"creation_id": container, "access_token": token})["id"]
+    try:
+        return _ig("GET", media, params={"fields": "permalink", "access_token": token}).get("permalink") or media
+    except PublishError:
+        return f"instagram media {media}"
+
+
 # ---------------------------------------------------------------- review bot
 
 
 def send_for_review(job_id: str) -> None:
     job = jobs.load(job_id)
     offer = jobs.get_offer(job.get("offer_id"))
-    text = f"Черновик {job_id}\n\n" + caption(job, offer, 900, "review")
+    brand = reels_settings.brand(job.get("brand", ""))
+    where = ", ".join(reels_settings.publish_targets(job.get("brand", ""))) or "никуда не настроено"
+    head = f"Черновик {job_id}" + (f" · {brand['title']}" if brand["title"] else "") + f"\nКуда: {where}"
+    text = head + "\n\n" + caption(job, offer, 900, "review")
     markup = {"inline_keyboard": [[
         {"text": "✅ Опубликовать", "callback_data": f"pub:{job_id}"},
         {"text": "🗑 Отклонить", "callback_data": f"rej:{job_id}"},

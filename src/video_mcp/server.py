@@ -495,6 +495,9 @@ class TokenAuth:
         if path.startswith("/.well-known/"):
             # No OAuth here: a 404 tells MCP clients (claude.ai) to connect without an auth flow.
             return await _plain(send, 404, b"not found")
+        if path.startswith("/reels-media/"):
+            # Instagram fetches the reel by link and cannot send the token: the path itself is signed
+            return await _reel_media(path, scope, send)
         if self.token:
             prefix = f"/{self.token}"
             headers = dict(scope.get("headers") or [])
@@ -504,6 +507,24 @@ class TokenAuth:
             elif not (auth.startswith("Bearer ") and hmac.compare_digest(auth[7:].strip(), self.token)):
                 return await _plain(send, 401, b"unauthorized", [(b"www-authenticate", b"Bearer")])
         return await self.app(scope, receive, send)
+
+
+async def _reel_media(path: str, scope, send):
+    from .reels import publish as reels_publish
+
+    video = reels_publish.media_file(path) if reels_settings.enabled else None
+    if video is None:
+        return await _plain(send, 404, b"not found")
+    size = video.stat().st_size
+    await send({"type": "http.response.start", "status": 200, "headers": [
+        (b"content-type", b"video/mp4"), (b"content-length", str(size).encode()),
+        (b"cache-control", b"no-store")]})
+    if scope.get("method") == "HEAD":
+        return await send({"type": "http.response.body", "body": b""})
+    with video.open("rb") as f:
+        while chunk := await anyio.to_thread.run_sync(f.read, 1 << 20):
+            await send({"type": "http.response.body", "body": chunk, "more_body": True})
+    await send({"type": "http.response.body", "body": b""})
 
 
 async def _plain(send, status: int, body: bytes, extra_headers=None):

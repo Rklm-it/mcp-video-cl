@@ -145,10 +145,40 @@ def placeholder(text: str, out: Path, seed: int) -> Path:
     return out
 
 
-def fetch_media(ref: str, dest_stem: Path) -> tuple[Path, str]:
-    """Get a user-supplied picture or clip: a URL or a file from the local video folder.
-    Returns (path, "image" | "video")."""
+VIDEO_EXTS = {".mp4", ".mov", ".webm", ".mkv", ".m4v"}
+PAGE_CUT_SECONDS = 90  # a scene never needs more of someone's video than this
+
+
+def _cut_from_page(ref: str, start: float, dest: Path) -> Path:
+    """A video page (YouTube, VK, X, TikTok…): download through yt-dlp like the analysis tools do and cut
+    [start, start + 90 s] without the original sound — the reel puts its own voice over it."""
+    import subprocess
+
+    if dest.is_file():  # re-render of the same reel: the cut is already here
+        return dest
+    src = src_mod.resolve(ref)
+    video, offset = src_mod.get_video_file(src, start, start + PAGE_CUT_SECONDS)
+    proc = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{max(0.0, start - offset):.3f}",
+         "-t", str(PAGE_CUT_SECONDS), "-i", str(video), "-an", "-c:v", "libx264", "-preset", "veryfast",
+         "-crf", "20", "-pix_fmt", "yuv420p", str(dest)], capture_output=True, text=True)
+    if proc.returncode != 0 or not dest.is_file():
+        raise ValueError(f"Could not cut {ref}: {proc.stderr.strip()[-300:]}")
+    return dest
+
+
+def fetch_media(ref: str, dest_stem: Path, start: float = 0.0) -> tuple[Path, str, float]:
+    """Get a user-supplied picture or clip: a direct URL, a video page, or a file from the local video folder.
+    Returns (path, "image" | "video", where to start inside the returned file)."""
     parsed = urlparse(ref)
+    suffix = Path(parsed.path).suffix.lower()
+    if parsed.scheme in ("http", "https") and suffix not in IMAGE_EXTS | VIDEO_EXTS:
+        try:
+            return _cut_from_page(ref, start, dest_stem.with_suffix(".cut.mp4")), "video", 0.0
+        except src_mod.SourceError as exc:
+            page_error = str(exc)  # not a page yt-dlp knows: maybe a direct file without an extension
+    else:
+        page_error = ""
     if parsed.scheme in ("http", "https"):
         src_mod._check_public_host(parsed.hostname or "")
         suffix = Path(parsed.path).suffix.lower() or ".bin"
@@ -163,10 +193,13 @@ def fetch_media(ref: str, dest_stem: Path) -> tuple[Path, str]:
                         raise ValueError(f"{ref} is larger than {MAX_MEDIA_BYTES // 2**20} MB")
                     f.write(chunk)
             ctype = resp.headers.get("content-type", "")
+        if ctype.startswith("text/html"):
+            raise ValueError(f"{ref} is a web page, not a picture or a video"
+                             + (f"; the video downloader said: {page_error}" if page_error else ""))
         kind = "image" if ctype.startswith("image/") or suffix in IMAGE_EXTS else "video"
     else:
         path = src_mod._resolve_local(ref).path
         kind = "image" if path.suffix.lower() in IMAGE_EXTS else "video"
     if kind == "image":
-        return fit(Image.open(path), dest_stem.with_suffix(".png")), "image"
-    return path, "video"
+        return fit(Image.open(path), dest_stem.with_suffix(".png")), "image", 0.0
+    return path, "video", start

@@ -122,6 +122,9 @@ def monitor(c: Canvas, t: float) -> None:
     c.pill((540, 1200), "t.me/nexus_subs_bot · NEXUS3", YELLOW, t, 3.6, size=40)
 
 
+# обложка (первый кадр и PNG для «Обложка → из фотоплёнки»): хук вопросом, как у @aldoniq
+COVER = ("ПОЧЕМУ ДЕШЁВЫЙ VPN", "УМИРАЕТ", "ЗА МЕСЯЦ?")
+
 SCENES = {
     "s4_01": (hook, 8.0),
     "s4_02": (one_server, 8.0),

@@ -20,6 +20,8 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 W, H, FPS = 1080, 1920, 30
 FONTS = Path(__file__).parent / "fonts"
+COVER_DROP = 190  # on the cover the scene moves down to make room for the big question
+COVER_FRAMES = 3  # the cover opens the first scene for 0.1 s: Instagram takes frame one as the thumbnail
 
 NAVY = (11, 20, 48)
 GRID = (26, 42, 85)
@@ -71,8 +73,10 @@ def background() -> Image.Image:
 
 
 class Canvas:
-    def __init__(self):
-        self.img = background().copy().convert("RGBA")
+    def __init__(self, bare: bool = False):
+        # bare: transparent canvas without header/title — the cover draws the scene on it and moves it down
+        self.bare = bare
+        self.img = Image.new("RGBA", (W, H), (0, 0, 0, 0)) if bare else background().copy().convert("RGBA")
 
     def layer(self) -> tuple[Image.Image, ImageDraw.ImageDraw]:
         lay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
@@ -89,6 +93,8 @@ class Canvas:
 
     # ---- building blocks -------------------------------------------------------------------
     def header(self, chapter: str, t: float) -> None:
+        if self.bare:
+            return
         a = prog(t, 0, 0.3)
         lay, d = self.layer()
         d.text((60, 70), "NEXUS · СЕТИ И VPN", font=font("Manrope", 28, "ExtraBold"), fill=MUTED)
@@ -99,6 +105,8 @@ class Canvas:
         self.put(lay, a)
 
     def title(self, line1: str, line2: str, t: float, t0: float = 0.1, size: int = 78) -> None:
+        if self.bare:
+            return
         while size > 40 and max(font("Unbounded", size, "Black").getlength(s) for s in (line1, line2)) > W - 120:
             size -= 2  # shrink a long line to fit the 60 px margins
         f = font("Unbounded", size, "Black")
@@ -244,15 +252,53 @@ class Canvas:
         self.mark((cx, y1 - 90), state == "ok", t, mark_t, r=46)
 
 
-def render(draw, seconds: float, out: Path, start: float = 0.0) -> Path:
-    """start > 0 skips the build-up: the first frame already shows the hook (feeds judge frame one)."""
+def cover_image(draw, at: float, question: tuple[str, ...] | None = None) -> Image.Image:
+    """Thumbnail the way @aldoniq's reels open: a big question on top, the finished scene under it.
+
+    question = (white, YELLOW BIG[, white]); without it the scene's last frame is used as is. Everything
+    important sits inside the 3:4 middle of the frame that the profile grid shows.
+    """
+    if not question:
+        c = Canvas()
+        draw(c, at)
+        return c.img.convert("RGB")
+    scene = Canvas(bare=True)
+    draw(scene, at)
+    img = background().copy().convert("RGBA")
+    img.alpha_composite(scene.img, (0, COVER_DROP))
+    d = ImageDraw.Draw(img)
+    y = 250
+    for i, line in enumerate(question):
+        big = i == 1
+        size = 150 if big else 88
+        while size > 40 and font("Unbounded", size, "Black").getlength(line) > W - 120:
+            size -= 2
+        d.text((60, y), line, font=font("Unbounded", size, "Black"), fill=YELLOW if big else WHITE)
+        y += size + 14
+    return img.convert("RGB")
+
+
+def render(draw, seconds: float, out: Path, start: float = 0.0, cover: bool | tuple[str, ...] = False) -> Path:
+    """start > 0 skips the build-up: the first frame already shows the hook (feeds judge frame one).
+
+    cover replaces the first COVER_FRAMES frames with the scene fully built, so Instagram's thumbnail (frame
+    one) is not an empty background; a tuple of lines puts a big question over it (cover_image). The cover
+    is also saved as <name>_cover.png for "Cover → add from gallery".
+    """
     out.parent.mkdir(parents=True, exist_ok=True)
+    thumb = None
+    if cover:
+        thumb = cover_image(draw, start + seconds - 1 / FPS, cover if isinstance(cover, tuple) else None)
+        thumb.save(out.with_name(f"{out.stem}_cover.png"))
     proc = subprocess.Popen(
         ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24",
          "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-", "-c:v", "libx264", "-preset", "medium", "-crf", "20",
          "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(out)],
         stdin=subprocess.PIPE)
     for i in range(int(seconds * FPS)):
+        if thumb and i < COVER_FRAMES:
+            proc.stdin.write(thumb.tobytes())
+            continue
         c = Canvas()
         draw(c, start + i / FPS)
         proc.stdin.write(c.img.convert("RGB").tobytes())
@@ -268,6 +314,10 @@ if __name__ == "__main__":
     episode, out_dir = sys.argv[1], Path(sys.argv[2])
     mod = importlib.import_module(f"episodes.{episode}")
     only = set(sys.argv[3:])
+    question = getattr(mod, "COVER", None)
     for name, (draw, seconds, *start) in mod.SCENES.items():
         if not only or name in only:
-            print(render(draw, seconds, out_dir / f"{name}.mp4", *start))
+            # every opening scene (_01, _01hot) gets the cover: whichever cut is uploaded starts with it
+            opening = name.split("_", 1)[1].startswith("01")
+            cover = (question or True) if opening else False
+            print(render(draw, seconds, out_dir / f"{name}.mp4", *start, cover=cover))

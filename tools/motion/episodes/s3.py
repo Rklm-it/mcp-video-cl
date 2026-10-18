@@ -82,6 +82,9 @@ def fix(c: Canvas, t: float) -> None:
     c.pill((540, 1170), "t.me/nexus_subs_bot · NEXUS3", YELLOW, t, 2.4, size=40)
 
 
+# обложка (первый кадр и PNG для «Обложка → из фотоплёнки»): хук вопросом, как у @aldoniq
+COVER = ("ПОЧЕМУ У МТС РАБОТАЕТ,", "А У БИЛАЙНА", "НЕТ?")
+
 SCENES = {
     "s3_01": (hook, 9.0),
     "s3_02": (filters, 9.0),

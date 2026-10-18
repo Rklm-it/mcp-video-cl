@@ -131,6 +131,33 @@ async def test_unknown_offer_is_rejected():
     assert res.isError and "Unknown offer" in res.content[0].text
 
 
+async def test_news_footage_from_a_video_page_is_cut_muted_and_blurred(video_dir, monkeypatch):
+    from PIL import Image
+    from video_mcp import sources as src_mod
+
+    page = "https://www.youtube.com/watch?v=tesla000001"
+    asked = []
+    monkeypatch.setattr(src_mod, "resolve", lambda raw: asked.append(raw) or raw)
+    # the page's video: 640x360 wide, red 0-4 s, lime 4-8 s, blue 8-12 s, with its own sound
+    monkeypatch.setattr(src_mod, "get_video_file", lambda src, start, end: (video_dir / "colors.mp4", 0.0))
+    res = await call("create_reel", background=False, title="Новость", music="none", setting="none", scenes=[
+        {"text": "Смотри.", "media": page, "media_start": 4.5, "fit": "blur"}])
+    assert not res.isError, res.content[0].text
+    assert asked == [page]
+    workdir = jobs.job_dir(res.content[0].text.split()[1])
+    cut = workdir / "scene00.cut.mp4"
+    assert [s["codec_type"] for s in probe(cut)["streams"]] == ["video"]  # their sound is gone
+    frame = workdir / "f.png"
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", "0.2", "-i",
+                    str(workdir / "reel.mp4"), "-frames:v", "1", str(frame)], check=True)
+    img = Image.open(frame).convert("RGB")
+    r, g, b = img.getpixel((540, 960))
+    assert g > 150 and r < 100 and b < 100  # media_start=4.5 → the lime part, not the red start
+    r2, g2, b2 = img.getpixel((540, 200))
+    # above the wide frame: its darkened blurred copy — not black bars, and not the frame itself (crop)
+    assert 60 < g2 < g - 8 and g2 > r2 and g2 > b2
+
+
 async def test_scene_with_local_video_media(video_dir):
     res = await call("create_reel", background=False, title="Клип", scenes=[{"text": "Смотри внимательно.", "media": "colors.mp4"}])
     assert not res.isError, res.content[0].text
@@ -403,6 +430,122 @@ async def test_reel_with_banned_words_is_refused():
     res = await call("create_reel", title="Доход на доставке", offer_id="eda", background=False,
                      scenes=[{"text": "Как заработать на доставке.", "image_prompt": "p", "offer": True}])
     assert not res.isError, res.content[0].text
+
+
+NEWS = {"news": {"title": "Ну и новости", "tg_channel": "@nuinovosti", "ig_user_id": "1784", "ig_token": "IGT"}}
+
+
+def news_brand(monkeypatch):
+    from video_mcp.config import settings
+
+    monkeypatch.setattr(reels_settings, "brands", NEWS)
+    monkeypatch.setattr(reels_settings, "tg_token", "bot")
+    monkeypatch.setattr(reels_settings, "tg_channel", "@nexus_main")
+    monkeypatch.setattr(reels_settings, "public_url", "https://v.example")
+    monkeypatch.setattr(settings, "token", "secret")
+
+
+def test_brands_have_their_own_targets(monkeypatch):
+    news_brand(monkeypatch)
+    assert reels_settings.publish_targets() == ["telegram"]  # the main channel has no Instagram configured
+    assert reels_settings.publish_targets("news") == ["telegram", "instagram"]
+    with pytest.raises(ValueError, match="Unknown brand 'nope'"):
+        reels_settings.publish_targets("nope")
+
+
+class FakeInstagram:
+    """Instagram Graph API double: records calls, processes the container on the second status poll."""
+
+    def __init__(self):
+        self.calls, self.polls = [], 0
+
+    def __call__(self, method, url, timeout=None, data=None, params=None):
+        import httpx
+
+        path = url.split("graph.instagram.com/")[1]
+        self.calls.append((method, path, data or params))
+        if path == "refresh_access_token":
+            body = {"access_token": "IGT2"}
+        elif path == "1784/media":
+            body = {"id": "c1"}
+        elif path == "c1":
+            self.polls += 1
+            body = {"status_code": "FINISHED" if self.polls > 1 else "IN_PROGRESS"}
+        elif path == "1784/media_publish":
+            body = {"id": "m1"}
+        else:
+            body = {"permalink": "https://www.instagram.com/reel/abc/"}
+        return httpx.Response(200, json=body)
+
+
+def test_publish_brand_reel_to_its_channel_and_instagram(monkeypatch):
+    news_brand(monkeypatch)
+    job = {"id": "1017-2000-aaaa", "created": "2026-10-17 20:00:00", "status": "ready", "title": "Ну и новость",
+           "scenes": [], "brand": "news"}
+    jobs.save(job)
+    (jobs.job_dir(job["id"]) / "reel.mp4").write_bytes(b"video")
+    sent = []
+    monkeypatch.setattr(publish, "_send_video",
+                        lambda chat, video, text, markup=None: sent.append(chat) or {"chat": {"username": "nuinovosti"},
+                                                                                     "message_id": 5})
+    ig = FakeInstagram()
+    monkeypatch.setattr(publish.httpx, "request", ig)
+    monkeypatch.setattr(publish, "IG_POLL_SECONDS", 0)
+
+    result = publish.publish(job["id"])
+    assert result == {"published": {"telegram": "https://t.me/nuinovosti/5",
+                                     "instagram": "https://www.instagram.com/reel/abc/"}, "errors": {}}
+    assert sent == ["@nuinovosti"]  # the brand's channel, not the main one
+    create = next(args for _m, path, args in ig.calls if path == "1784/media")
+    assert create["media_type"] == "REELS" and create["access_token"] == "IGT2"  # refreshed token is used
+    url = create["video_url"]
+    assert url.startswith("https://v.example/reels-media/1017-2000-aaaa/") and url.endswith(".mp4")
+    path = url.removeprefix("https://v.example")
+    assert publish.media_file(path) == jobs.job_dir(job["id"]) / "reel.mp4"
+    assert publish.media_file(path.replace(path[-10:-4], "000000")) is None  # a guessed signature gets nothing
+    # the refreshed token is kept: the next publish does not refresh again
+    assert json.loads((reels_settings.root / "ig_tokens.json").read_text())["1784"]["token"] == "IGT2"
+    assert publish._ig_token(reels_settings.brand("news")) == "IGT2"
+    assert sum(path == "refresh_access_token" for _m, path, _a in ig.calls) == 1
+
+
+def test_instagram_error_text_reaches_the_owner(monkeypatch):
+    import httpx
+
+    news_brand(monkeypatch)
+    job = {"id": "1017-2000-bbbb", "created": "2026-10-17 20:00:00", "status": "ready", "title": "t",
+           "scenes": [], "brand": "news"}
+    jobs.save(job)
+    (jobs.job_dir(job["id"]) / "reel.mp4").write_bytes(b"video")
+    monkeypatch.setattr(publish, "_send_video", lambda *a, **k: {"chat": {}, "message_id": 1})
+    monkeypatch.setattr(publish, "_ig_token", lambda brand: "IGT")
+    monkeypatch.setattr(publish.httpx, "request", lambda *a, **k: httpx.Response(
+        400, json={"error": {"message": "Application does not have permission for this action"}}))
+    result = publish.publish(job["id"])
+    assert "telegram" in result["published"]
+    assert "does not have permission" in result["errors"]["instagram"]
+
+
+async def test_reel_media_is_served_without_the_mcp_token(monkeypatch):
+    import httpx
+
+    news_brand(monkeypatch)
+    monkeypatch.setattr(reels_settings, "enabled", True)
+    job_id = "1017-2000-cccc"
+    jobs.save({"id": job_id, "status": "ready", "title": "t", "scenes": []})
+    (jobs.job_dir(job_id) / "reel.mp4").write_bytes(b"0123456789")
+
+    async def inner(scope, receive, send):
+        raise AssertionError("must not reach the MCP app")
+
+    app = server.TokenAuth(inner, "secret")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as client:
+        ok = await client.get(publish.media_url(job_id).removeprefix("https://v.example"))
+        bad = await client.get(f"/reels-media/{job_id}/{'0' * 32}.mp4")
+        other = await client.get("/mcp")
+    assert ok.status_code == 200 and ok.content == b"0123456789" and ok.headers["content-type"] == "video/mp4"
+    assert bad.status_code == 404
+    assert other.status_code == 401  # everything else still needs the token
 
 
 def test_cleanup_old_drops_media_of_old_published_reels(tmp_path):
