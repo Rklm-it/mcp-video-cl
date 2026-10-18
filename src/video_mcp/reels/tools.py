@@ -62,6 +62,12 @@ class Scene(BaseModel):
     fit: Literal["crop", "blur"] = Field("crop", description="A wide video in media: crop = the centre fills "
                                                              "the screen; blur = the whole frame in the middle "
                                                              "on its blurred copy (news footage, cars, people)")
+    shots: list[float] = Field(default_factory=list, max_length=6, description=(
+        "Fast cutting: more moments (seconds) of the same media video; the scene's time is split between "
+        "media_start and these, e.g. [95, 113] for three 1.5-2 s shots under one sentence"))
+    zoom: bool = Field(False, description="Slow push-in on the action during the scene (video or picture)")
+    slowmo: float = Field(1.0, ge=0.25, le=1.0, description="Slow the media video down: 0.5 = twice slower "
+                                                              "(the peak of a stunt, a fall, a jump)")
 
 
 class SceneEdit(BaseModel):
@@ -74,6 +80,9 @@ class SceneEdit(BaseModel):
     label: str | None = None
     media_start: float | None = Field(None, ge=0)
     fit: Literal["crop", "blur"] | None = None
+    shots: list[float] | None = Field(None, max_length=6)
+    zoom: bool | None = None
+    slowmo: float | None = Field(None, ge=0.25, le=1.0)
 
 
 _registered = False
@@ -221,6 +230,10 @@ def register(mcp: FastMCP, run) -> None:
         ] = "none",
         brand: Annotated[str, Field(description="Which channel the reel is for: empty = the main one, or a "
                                                 "brand from REELS_BRANDS (see reels_setup), e.g. 'news'")] = "",
+        ambient: Annotated[float, Field(ge=0, le=1, description="Keep the media videos' own sound under the voice "
+                                                                "at this volume: 0.25 = engines and crowd audible, "
+                                                                "the voice on top; 0 = no original sound")] = 0.0,
+        whoosh: Annotated[bool, Field(description="A short whoosh on every cut (shot and scene changes)")] = False,
         ctx: Context | None = None,
     ) -> list[ContentBlock]:
         """Render a vertical reel (1080x1920): voice-over, animated pictures, subtitles and, for ad reels,
@@ -243,6 +256,7 @@ def register(mcp: FastMCP, run) -> None:
             "id": jobs.new_id(), "created": time.strftime("%Y-%m-%d %H:%M:%S"), "status": "rendering",
             "title": title.strip(), "description": description.strip(), "hashtags": hashtags or [],
             "offer_id": offer_id, "scenes": items, "music": music, "setting": setting, "brand": brand,
+            "ambient": ambient, "whoosh": whoosh,
         }
         jobs.save(job)
         if background is None:
@@ -269,11 +283,13 @@ def register(mcp: FastMCP, run) -> None:
             if not 0 <= ch.index < len(job["scenes"]):
                 raise ValueError(f"No scene {ch.index}")
             scene = job["scenes"][ch.index]
-            for key in ("text", "image_prompt", "media", "offer", "animate", "label", "media_start", "fit"):
+            for key in ("text", "image_prompt", "media", "offer", "animate", "label", "media_start", "fit",
+                        "shots", "zoom", "slowmo"):
                 value = getattr(ch, key)
                 if value is not None:
                     scene[key] = value
-            if ch.image_prompt is not None or ch.media is not None or ch.media_start is not None:
+            if (ch.image_prompt is not None or ch.media is not None or ch.media_start is not None
+                    or ch.shots is not None):
                 for old in workdir.glob(f"scene{ch.index:02d}.*"):
                     old.unlink()
         if title is not None:
@@ -343,6 +359,15 @@ def register(mcp: FastMCP, run) -> None:
         result = await run(publish.publish, job_id, targets)
         return f"Published: {result['published'] or 'nothing'}" + (
             f"\nErrors: {result['errors']}" if result["errors"] else "")
+
+    @mcp.tool(annotations=WRITE, structured_output=False)
+    async def add_music(
+        url: Annotated[str, Field(description="Direct link to an mp3/m4a/wav/ogg track you may use "
+                                              "(royalty-free libraries: Pixabay Music, YouTube Audio Library…)")],
+        track: Annotated[str, Field(description="Name for the track, e.g. 'hype-drive' (letters, digits, -_)")],
+    ) -> str:
+        """Put a background track into the music folder; create_reel(music=track) or a random pick uses it."""
+        return await run(_add_music, url, track)
 
     @mcp.tool(annotations=PUBLISH, structured_output=False)
     async def reject_reel(job_id: str) -> str:
@@ -427,6 +452,54 @@ def _draw(prompt: str, aspect: str, send_to_review: bool) -> tuple[Path, bytes]:
             publish._tg("sendDocument", data={"chat_id": reels_settings.tg_review_chat, "caption": path.name},
                         files={"document": (path.name, f, "image/png")})
     return path, buf.getvalue()
+
+
+MUSIC_EXTS = (".mp3", ".m4a", ".wav", ".ogg", ".aac")
+MAX_MUSIC_BYTES = 30 * 1024 * 1024
+
+
+def _add_music(url: str, name: str) -> str:
+    import re
+
+    import httpx
+    from urllib.parse import urlparse
+
+    if not reels_settings.music_dir:
+        raise ValueError("REELS_MUSIC_DIR is not set: no music folder on this server")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,60}", name):
+        raise ValueError("name: letters, digits, - and _ only")
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("Need an http(s) link")
+    src_mod._check_public_host(parsed.hostname or "")
+    folder = Path(reels_settings.music_dir)
+    folder.mkdir(parents=True, exist_ok=True)
+    tmp = folder / f".{name}.part"
+    try:
+        with httpx.stream("GET", url, timeout=120, follow_redirects=True) as resp:
+            resp.raise_for_status()
+            ctype = resp.headers.get("content-type", "")
+            size = 0
+            with tmp.open("wb") as f:
+                for chunk in resp.iter_bytes():
+                    size += len(chunk)
+                    if size > MAX_MUSIC_BYTES:
+                        raise ValueError(f"Track is larger than {MAX_MUSIC_BYTES // 2**20} MB")
+                    f.write(chunk)
+        if ctype.startswith("text/"):
+            raise ValueError(f"The link gives a web page ({ctype}), not an audio file")
+        try:
+            duration = fr.probe_duration(tmp)
+        except Exception:
+            duration = 0.0
+        if duration <= 0:
+            raise ValueError("ffprobe sees no audio in the file")
+        ext = Path(parsed.path).suffix.lower()
+        dest = folder / f"{name}{ext if ext in MUSIC_EXTS else '.mp3'}"
+        tmp.replace(dest)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return f"Added {dest.name} ({duration:.0f} s). Tracks now: {len(reels_settings.music_tracks())}"
 
 
 def process(job: dict, after: str, progress=lambda _f, _m: None) -> str:
