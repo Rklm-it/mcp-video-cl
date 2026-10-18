@@ -61,6 +61,6 @@ if [ -n "$IG_ID" ] && [ -z "$(current REELS_PUBLIC_URL)" ]; then
   setv REELS_PUBLIC_URL "https://$DOMAIN"
 fi
 
-echo "Перезапускаю сервер…"
-cd "$DIR" && docker compose up -d --build >/dev/null
+echo "Перезапускаю сервер (новые настройки из .env)…"
+cd "$DIR" && docker compose up -d
 echo "Готово: канал «$TITLE» → $TG${IG_ID:+ и Instagram $IG_ID}. Проверка — инструмент reels_setup."
