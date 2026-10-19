@@ -15,7 +15,7 @@ from pathlib import Path
 from PIL import ImageFont
 
 from ..frames import probe_duration
-from . import images, tts, video_gen
+from . import fx, images, tts, video_gen
 from .config import reels_settings
 from .jobs import ad_marker
 
@@ -45,6 +45,7 @@ class SceneOut:
     shots: list[float] = field(default_factory=list)  # more moments of the same video: the scene is cut between them
     zoom: bool = False  # slow push-in
     slowmo: float = 1.0  # 0.5 = the video plays twice slower
+    fx: list[dict] = field(default_factory=list)  # motion graphics over the scene (see fx.py)
 
     @property
     def starts(self) -> list[float]:
@@ -198,7 +199,7 @@ def _prepare_scene(job: dict, i: int, workdir: Path) -> SceneOut:
     start = media_start if kind == "video" else 0.0
     return SceneOut(visual, kind, audio, words, start=start, fit=scene.get("fit") or "crop",
                     shots=shots if kind == "video" else [], zoom=bool(scene.get("zoom")),
-                    slowmo=float(scene.get("slowmo") or 1.0))
+                    slowmo=float(scene.get("slowmo") or 1.0), fx=list(scene.get("fx") or []))
 
 
 def _animate_scene(job: dict, i: int, o: SceneOut, workdir: Path) -> Path | None:
@@ -286,7 +287,24 @@ def _scene_clip(o: SceneOut, index: int, workdir: Path) -> Path:
             "-vf", f"scale={images.W * 3 // 2}:{images.H * 3 // 2},"
                    f"zoompan={motion}:d=1:s={images.W}x{images.H}:fps={FPS},setsar=1",
             "-t", f"{o.duration:.3f}", *encode, str(out))
+    if o.fx:
+        _overlay_fx(o, out, index, workdir, encode)
     return out
+
+
+def _overlay_fx(o: SceneOut, clip: Path, index: int, workdir: Path, encode: list[str]) -> None:
+    """Lay the scene's motion graphics over its finished clip (labels and subtitles come later, on top)."""
+    layer = fx.render_layer(o.fx, o.duration, workdir / f"fx{index:02d}.mov", FPS)
+    if not layer:
+        return
+    path, start = layer
+    out = workdir / f"clip{index:02d}.fx.mp4"
+    _ff("-i", str(clip), "-i", str(path), "-filter_complex",
+        f"[1:v]tpad=start_duration={start:.3f}:color=0x00000000[fx];"
+        "[0:v][fx]overlay=0:0:eof_action=pass:format=auto,setsar=1",
+        "-t", f"{o.duration:.3f}", *encode, str(out))
+    out.replace(clip)
+    path.unlink(missing_ok=True)
 
 
 def _has_audio(path: Path) -> bool:
