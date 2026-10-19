@@ -950,3 +950,47 @@ async def test_media_start_skips_the_beginning_and_links_keep_case(video_dir):
                     str(workdir / "reel.mp4"), "-frames:v", "1", str(frame)], check=True)
     r, g, b = Image.open(frame).convert("RGB").resize((1, 1)).getpixel((0, 0))
     assert b > r, (r, g, b)
+
+
+async def test_fx_flash_lands_at_its_moment_over_the_footage(video_dir):
+    # colors.mp4 is lime from 4 s; a flash at 0.8 s of the scene must be white then and only then
+    res = await call("create_reel", background=False, title="Вспышка", music="none", setting="none", scenes=[
+        {"text": "Удар.", "media": "colors.mp4", "media_start": 4.5, "fx": [{"type": "flash", "at": 0.8}]}])
+    assert not res.isError, res.content[0].text
+    assert "[flash]" in res.content[0].text
+    reel = jobs.job_dir(res.content[0].text.split()[1]) / "reel.mp4"
+    before, during = frame_rgb(reel, 0.4, (100, 960)), frame_rgb(reel, 0.83, (100, 960))
+    assert before[1] > 150 and before[0] < 100  # lime, the flash has not started
+    assert min(during) > 180  # white
+
+
+async def test_fx_counter_is_drawn_over_the_footage(video_dir):
+    from PIL import Image
+
+    res = await call("create_reel", background=False, title="Счётчик", music="none", setting="none", scenes=[
+        {"text": "Пятьдесят миллионов.", "media": "colors.mp4", "media_start": 9,
+         "fx": [{"type": "counter", "count_to": 50000000, "prefix": "$", "y": 0.3}]}])
+    assert not res.isError, res.content[0].text
+    reel = jobs.job_dir(res.content[0].text.split()[1]) / "reel.mp4"
+    frame_rgb(reel, 1.2)  # writes f1.2.png next to the reel
+    row = Image.open(reel.with_name("f1.2.png")).convert("RGB").crop((0, 560, 1080, 600)).tobytes()
+    yellow = sum(1 for i in range(0, len(row), 3) if row[i] > 200 and row[i + 1] > 170 and row[i + 2] < 90)
+    assert yellow > 2000  # the yellow digits over the blue footage
+
+
+async def test_fx_refuses_effects_it_cannot_draw():
+    res = await call("create_reel", title="x", scenes=[
+        {"text": "текст", "image_prompt": "p", "fx": [{"type": "counter"}]}])
+    assert res.isError and "Scene 0" in res.content[0].text and "count_to" in res.content[0].text
+    res = await call("create_reel", title="x", scenes=[
+        {"text": "текст", "image_prompt": "p", "fx": [{"type": "route", "text": "Дубай"}]}])
+    assert res.isError and "2 or 3 places" in res.content[0].text
+
+
+def test_fx_numbers_and_empty_layer(tmp_path):
+    from video_mcp.reels import fx
+
+    assert fx._number(50_000_000, 0) == "50 000 000"
+    assert fx._number(0.81, 2) == "0,81"
+    assert fx._number(-4900, 0) == "−4 900"
+    assert fx.render_layer([{"type": "flash", "at": 5}], 2.0, tmp_path / "x.mov", 30) is None

@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 
 from .. import frames as fr
 from .. import sources as src_mod
-from . import clips, images, jobs, publish, render
+from . import clips, fx, images, jobs, publish, render
 from .config import reels_settings
 
 log = logging.getLogger("video_mcp.reels")
@@ -39,11 +39,43 @@ pictures, rendering and uploading.
    product with offer=true, they get the banner. Keep ads in at most ~30% of reels.
 4. After create_reel look at the preview frames. Publish only after the user approved it
    (in chat, or with the Telegram review button when after="review").
+5. Motion graphics (scene `fx`) make news footage feel alive: a counter running up to the number the voice
+   says, a sticker popping in on the punchline, a ring or an arrow on the person or detail being talked
+   about, a route for flights and chases, a flash on an impact cut. One or two per scene, timed to the
+   words; positions are fractions of the frame (with fit="blur" the wide video spans y≈0.34-0.66).
 """
 
 READ = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
 WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=True)
 PUBLISH = ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=True)
+
+
+class Fx(BaseModel):
+    type: Literal["counter", "pop", "circle", "arrow", "route", "flash"] = Field(description=(
+        "counter = a big number running from count_from to count_to; pop = a sticker with text popping in; "
+        "circle = a ring drawn around (x, y); arrow = an arrow flying in from `side` and poking at (x, y); "
+        "route = a flight card 'A > B' with a plane moving, a third place = where it ended up instead; "
+        "flash = a white flash (an impact, a cut)"))
+    at: float = Field(0, ge=0, description="Start, seconds from the scene start (time it to the words)")
+    dur: float | None = Field(None, gt=0, description="How long it stays; default: to the scene end "
+                                                      "(flash: 0.3 s)")
+    text: str = Field("", description="pop: 1-4 words; route: places, e.g. 'Дубай > Тель-Авив > Эр-Рияд'")
+    count_from: float = Field(0, description="counter: start value")
+    count_to: float | None = Field(None, description="counter: final value, e.g. 50000000")
+    prefix: str = Field("", description="counter: before the number, e.g. '$' or '−'")
+    suffix: str = Field("", description="counter: after the number, e.g. ' м', ' км/ч', ' ₽'")
+    decimals: int = Field(0, ge=0, le=3, description="counter: digits after the comma (0,81 → 2)")
+    style: Literal["sticker", "alert", "stamp", "plain"] = Field(
+        "sticker", description="pop: sticker = yellow, tilted; alert = red, pulsing (СРОЧНО); "
+                               "stamp = slams down and shakes (ФЕЙК, ЗАПРЕЩЕНО); plain = white text")
+    color: Literal["yellow", "red", "white", "green"] | None = Field(None, description="Override the colour")
+    x: float = Field(0.5, ge=0, le=1, description="Horizontal position, 0 = left edge, 1 = right edge")
+    y: float | None = Field(None, ge=0, le=1, description="Vertical position, 0 = top; default 0.28 for "
+                                                          "counter/pop/route, 0.5 for circle/arrow")
+    r: float = Field(0.14, gt=0, le=0.5, description="circle: radius as a share of the frame width")
+    side: Literal["left", "right", "top", "bottom", "top-left", "top-right", "bottom-left", "bottom-right"] = (
+        Field("left", description="arrow: the side it comes from"))
+    angle: float | None = Field(None, ge=-30, le=30, description="pop: tilt in degrees")
 
 
 class Scene(BaseModel):
@@ -68,6 +100,7 @@ class Scene(BaseModel):
     zoom: bool = Field(False, description="Slow push-in on the action during the scene (video or picture)")
     slowmo: float = Field(1.0, ge=0.25, le=1.0, description="Slow the media video down: 0.5 = twice slower "
                                                               "(the peak of a stunt, a fall, a jump)")
+    fx: list[Fx] = Field(default_factory=list, max_length=6, description="Motion graphics over the scene")
 
 
 class SceneEdit(BaseModel):
@@ -83,6 +116,7 @@ class SceneEdit(BaseModel):
     shots: list[float] | None = Field(None, max_length=6)
     zoom: bool | None = None
     slowmo: float | None = Field(None, ge=0.25, le=1.0)
+    fx: list[Fx] | None = Field(None, max_length=6, description="Replaces the scene's effects; [] removes them")
 
 
 _registered = False
@@ -94,6 +128,15 @@ def _check_wording(offer: dict | None, title: str, description: str, scenes: lis
     if hits:
         raise ValueError("The offer's advertiser bans these words in ads: " + "; ".join(hits)
                          + ". Rephrase (e.g. «доход», «заработок», «партнёр сервиса») and try again.")
+
+
+def _check_fx(scenes: list[dict]) -> None:
+    for i, s in enumerate(scenes):
+        for effect in s.get("fx") or []:
+            try:
+                fx.check(effect)
+            except ValueError as exc:
+                raise ValueError(f"Scene {i}: {exc}") from None
 
 
 def _check_animated(scenes: list[dict]) -> None:
@@ -127,6 +170,7 @@ def register(mcp: FastMCP, run) -> None:
             lines.append(f"Offer: {job['offer_id']}")
         for i, s in enumerate(job["scenes"]):
             flag = (" [offer]" if s.get("offer") else "") + (" [video]" if s.get("animate") else "")
+            flag += "".join(f" [{e['type']}]" for e in s.get("fx") or [])
             lines.append(f"  {i}. {s['text']}{flag}")
         if job.get("published"):
             lines.append("Published: " + ", ".join(f"{k}: {v}" for k, v in job["published"].items()))
@@ -251,6 +295,7 @@ def register(mcp: FastMCP, run) -> None:
         if any(s["offer"] for s in items) and not offer_id:
             raise ValueError("Scenes are marked offer=true but no offer_id is given")
         _check_animated(items)
+        _check_fx(items)
         _check_wording(jobs.get_offer(offer_id), title, description, items)
         job = {
             "id": jobs.new_id(), "created": time.strftime("%Y-%m-%d %H:%M:%S"), "status": "rendering",
@@ -288,6 +333,8 @@ def register(mcp: FastMCP, run) -> None:
                 value = getattr(ch, key)
                 if value is not None:
                     scene[key] = value
+            if ch.fx is not None:
+                scene["fx"] = [f.model_dump() for f in ch.fx]
             if (ch.image_prompt is not None or ch.media is not None or ch.media_start is not None
                     or ch.shots is not None):
                 for old in workdir.glob(f"scene{ch.index:02d}.*"):
@@ -299,6 +346,7 @@ def register(mcp: FastMCP, run) -> None:
         if any(s.get("offer") for s in job["scenes"]) and not job.get("offer_id"):
             raise ValueError("Scenes are marked offer=true but the reel has no offer")
         _check_animated(job["scenes"])
+        _check_fx(job["scenes"])
         _check_wording(jobs.get_offer(job.get("offer_id")), job["title"], job.get("description", ""), job["scenes"])
         jobs.save(job)
         return await build(job, after, ctx, background)
