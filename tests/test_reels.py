@@ -501,6 +501,35 @@ async def test_animate_all_renders_in_background(monkeypatch):
     assert [s["animate"] for s in job["scenes"]] == [True, True, False]
 
 
+async def test_video_clips_are_not_counted_as_paid_animations(monkeypatch, tmp_path):
+    from video_mcp.reels import tools
+
+    monkeypatch.setattr(reels_settings, "video", "veo")
+    monkeypatch.setattr(reels_settings, "animate_all", True)
+    monkeypatch.setattr(reels_settings, "max_animated", 8)
+    page = "https://www.youtube.com/watch?v=Lm0wBKI1xxs"
+    assert tools.effective_animate({"media": page}) is False
+    assert tools.effective_animate({"media": "clip.mp4"}) is False
+    assert tools.effective_animate({"media": "https://example.com/photo.JPG?w=2"}) is True
+    assert tools.effective_animate({"image_prompt": "a car"}) is True
+    assert tools.effective_animate({"media": page, "animate": True}) is True  # an explicit flag still wins
+    scenes = [{"text": f"Шаг {i}.", "media": page, "animate": None} for i in range(12)]
+    for s in scenes:
+        s["animate"] = tools.effective_animate(s)
+    tools._check_animated(scenes)  # 12 clips, limit 8: nothing to pay for, so no refusal
+    # a picture scene switched to a clip by edit_reel stops counting as well
+    job = {"id": "1020-0000-test", "status": "ready", "title": "Т", "description": "", "offer_id": None,
+           "scenes": [{"text": "Сцена.", "image_prompt": "a car", "media": None, "animate": True,
+                       "fx": [], "offer": False}]}
+    monkeypatch.setattr(tools.jobs, "load", lambda job_id: job)
+    monkeypatch.setattr(tools.jobs, "save", lambda j: None)
+    monkeypatch.setattr(tools.jobs, "job_dir", lambda job_id: tmp_path)
+    monkeypatch.setattr(tools, "_process_quietly", lambda job, after: None)  # no render in this test
+    res = await call("edit_reel", job_id=job["id"], changes=[{"index": 0, "media": page}])
+    assert not res.isError, res.content[0].text
+    assert job["scenes"][0]["animate"] is False
+
+
 def test_forbidden_word_stems_match_word_start_only():
     offer = {"forbidden_words": ["работ", "зарплат"]}
     assert jobs.forbidden_hits(offer, ["Как заработать курьером", "Доход до 3400 ₽ в день"]) == []
