@@ -149,6 +149,12 @@ VIDEO_EXTS = {".mp4", ".mov", ".webm", ".mkv", ".m4v"}
 PAGE_CUT_SECONDS = 90  # a scene never needs more of someone's video than this
 
 
+def is_picture(ref: str) -> bool:
+    """Whether a scene's `media` is a still picture (only those can be animated) — by the name, before
+    anything is downloaded: a link without a picture extension is a video page or a clip."""
+    return Path(urlparse(ref).path).suffix.lower() in IMAGE_EXTS
+
+
 def _cut_from_page(ref: str, start: float, dest: Path, length: float = PAGE_CUT_SECONDS) -> Path:
     """A video page (YouTube, VK, X, TikTok…): download through yt-dlp like the analysis tools do and cut
     [start, start + length]. The sound stays in the file: the reel mixes it quietly under the voice or drops it."""

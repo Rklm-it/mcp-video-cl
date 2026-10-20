@@ -333,6 +333,8 @@ def register(mcp: FastMCP, run) -> None:
                 value = getattr(ch, key)
                 if value is not None:
                     scene[key] = value
+            if ch.media is not None and ch.animate is None and not images.is_picture(ch.media):
+                scene["animate"] = False  # a picture turned into a clip: nothing to animate any more
             if ch.fx is not None:
                 scene["fx"] = [f.model_dump() for f in ch.fx]
             if (ch.image_prompt is not None or ch.media is not None or ch.media_start is not None
@@ -599,6 +601,8 @@ def effective_animate(scene: dict) -> bool:
     """Explicit flag wins; otherwise REELS_ANIMATE_ALL decides (user video clips are never re-animated)."""
     if scene.get("animate") is not None:
         return bool(scene["animate"])
+    if scene.get("media") and not images.is_picture(scene["media"]):
+        return False  # a clip or a video page plays as it is and costs nothing
     return reels_settings.animate_all and reels_settings.video != "none"
 
 
