@@ -636,6 +636,17 @@ async def test_reel_media_is_served_without_the_mcp_token(monkeypatch):
     assert other.status_code == 401  # everything else still needs the token
 
 
+async def test_get_reel_gives_the_public_file_link(monkeypatch):
+    news_brand(monkeypatch)
+    job_id = "1017-2000-dddd"
+    jobs.save({"id": job_id, "status": "ready", "title": "t", "scenes": []})
+    res = await call("get_reel", job_id=job_id, frames=0)
+    assert "File:" not in res.content[0].text  # nothing rendered yet
+    (jobs.job_dir(job_id) / "reel.mp4").write_bytes(b"0")
+    res = await call("get_reel", job_id=job_id, frames=0)
+    assert f"File: {publish.media_url(job_id)}" in res.content[0].text
+
+
 def test_cleanup_old_drops_media_of_old_published_reels(tmp_path):
     import os
     import time as _time

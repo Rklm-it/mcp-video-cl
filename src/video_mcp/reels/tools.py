@@ -392,8 +392,13 @@ def register(mcp: FastMCP, run) -> None:
         from ..server import _text
 
         job = jobs.load(job_id)
-        blocks: list[ContentBlock] = [_text(summary(job))]
-        if frames and (jobs.job_dir(job_id) / "reel.mp4").is_file():
+        text = summary(job)
+        ready = (jobs.job_dir(job_id) / "reel.mp4").is_file()
+        if ready and reels_settings.public_url:
+            # a direct link to the file: for posting by hand or through a browser where there is no API
+            text += f"\nFile: {publish.media_url(job_id)}"
+        blocks: list[ContentBlock] = [_text(text)]
+        if frames and ready:
             blocks += await run(previews, job_id, frames)
         return blocks
 
