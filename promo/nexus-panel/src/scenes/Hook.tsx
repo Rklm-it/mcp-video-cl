@@ -17,15 +17,16 @@ export const HOOK_DEFAULTS = {
   lines: ['5 фишек,', 'которых нет', 'в других VPN-панелях'],
 };
 
-export const Hook: React.FC<Partial<typeof HOOK_DEFAULTS>> = (props) => {
+// duration — фактическая длина сцены: с озвучкой она вытягивается под фразу (см. Main.tsx)
+export const Hook: React.FC<Partial<typeof HOOK_DEFAULTS> & { duration?: number }> = ({ duration = HOOK_DURATION, ...props }) => {
   const { eyebrow, lines } = { ...HOOK_DEFAULTS, ...props };
   const frame = useCurrentFrame();
 
   // плоскость панели: наклон и медленный наезд на всём протяжении
-  const push = interpolate(frame, [0, HOOK_DURATION], [0, 1], clampOpt);
+  const push = interpolate(frame, [0, duration], [0, 1], clampOpt);
   const scale = 0.66 + 0.06 * push;
   // текст уходит вверх с размытием перед склейкой
-  const out = ramp(frame, 50, 16, EASE.exit);
+  const out = ramp(frame, duration - 22, 16, EASE.exit);
 
   return (
     <AbsoluteFill style={{ background: `linear-gradient(160deg, ${C.bg} 0%, ${C.bg2} 55%, #0f0828 100%)`, overflow: 'hidden' }}>

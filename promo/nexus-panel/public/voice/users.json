@@ -1,0 +1,32 @@
+{
+ "text": "Любой клиент находится за секунду.",
+ "voice": "nPczCjzI2devNBz1zQrb",
+ "model": "eleven_multilingual_v2",
+ "words": [
+  {
+   "text": "Любой",
+   "start": 0.0,
+   "end": 0.348
+  },
+  {
+   "text": "клиент",
+   "start": 0.383,
+   "end": 0.743
+  },
+  {
+   "text": "находится",
+   "start": 0.789,
+   "end": 1.242
+  },
+  {
+   "text": "за",
+   "start": 1.289,
+   "end": 1.37
+  },
+  {
+   "text": "секунду.",
+   "start": 1.405,
+   "end": 2.183
+  }
+ ]
+}

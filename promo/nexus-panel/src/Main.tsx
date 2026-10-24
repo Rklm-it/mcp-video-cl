@@ -16,7 +16,8 @@ import { Updates, UPDATES_DURATION } from './scenes/Updates';
 import { Migrate, MIGRATE_DURATION } from './scenes/Migrate';
 import { Chapter, CHAPTER_DURATION } from './scenes/Chapter';
 import { Caption, FeatureHeader, FlashCut } from './lib/ui';
-import { C, clampOpt, useFonts } from './theme';
+import { C, FPS, clampOpt, useFonts } from './theme';
+import VOICE_JSON from './voice.json';
 
 // Сначала то, чего нет у других (5 фишек, обещанных в хуке), потом — ежедневное.
 const ORDER = [
@@ -35,17 +36,35 @@ const ORDER = [
 ] as const;
 type ShotId = (typeof ORDER)[number][0];
 
+// Озвучка (ElevenLabs): src/voice.json пишет promo/nexus-review/voice/synth.py --manifest.
+// Пустой файл — ролик без голоса, как раньше. Сцена вытягивается под фразу: голос начинается через
+// VOICE_LEAD кадров после склейки и заканчивается за VOICE_TAIL до следующей; хвост сцены просто держит
+// последний кадр (интерполяции зажаты).
+type Voice = { file: string; duration: number };
+const VOICE = VOICE_JSON as Partial<Record<ShotId, Voice>>;
+const VOICE_LEAD: Partial<Record<ShotId, number>> = { hook: 2 };
+const VOICE_TAIL = 10;
+const lead = (id: ShotId) => VOICE_LEAD[id] ?? 8;
+const voiceFrames = (id: ShotId) => (VOICE[id] ? Math.ceil(VOICE[id]!.duration * FPS) : 0);
+
 export const SHOTS = ORDER.reduce(
-  (acc, [id, duration], i) => {
+  (acc, [id, base], i) => {
     const prev = i === 0 ? null : acc[ORDER[i - 1][0]];
+    const duration = Math.max(base, voiceFrames(id) ? lead(id) + voiceFrames(id) + VOICE_TAIL : 0);
     acc[id] = { from: prev ? prev.from + prev.duration : 0, duration };
     return acc;
   },
   {} as Record<ShotId, { from: number; duration: number }>,
 );
+// где звучит голос — по этим отрезкам приглушается музыка
+export const VOICE_SPANS = ORDER.filter(([id]) => VOICE[id]).map(([id]) => ({
+  id, from: SHOTS[id].from + lead(id), to: SHOTS[id].from + lead(id) + voiceFrames(id),
+}));
 export const TOTAL = SHOTS.outro.from + SHOTS.outro.duration;
 
-const SCENES: Record<ShotId, React.FC> = {
+// duration получают все сцены; у кого своих props нет, просто не читают его
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const SCENES: Record<ShotId, React.FC<any>> = {
   hook: Hook, cdn: Cdn, routing: Routing, stateAi: StateAi, updates: Updates, migrate: Migrate, chapter: Chapter,
   dashboard: Dashboard, nodes: Nodes, users: Users, payments: Payments, outro: Outro,
 };
@@ -56,15 +75,17 @@ export const FEATURES: { shot: ShotId; title: string; sub: string }[] = [
   { shot: 'routing', title: 'Маршруты\nпо сервисам', sub: 'Банки — через Россию,\n*Telegram и ИИ — через Европу*' },
   { shot: 'stateAi', title: 'Центр состояния\n+ ИИ-разбор', sub: 'Панель сама находит проблемы,\n*ИИ говорит, что чинить*' },
   { shot: 'updates', title: 'Обновление\nвсех нод', sub: 'Одной кнопкой.\n*Ошибка — откат сам*' },
-  { shot: 'migrate', title: 'Переезд\nс других панелей', sub: 'Remnawave, Marzban, 3x-ui, Hiddify —\n*клиенты со сроками*' },
+  { shot: 'migrate', title: 'Переезд\nс других панелей', sub: 'Remnawave, Marzban, 3x-ui, 3XUIStore —\n*клиенты со сроками*' },
 ];
 
 // Субтитры (C1): у каждой сцены свой факт; у концовки субтитра нет — она чистая.
+// Субтитр держится до конца своей сцены (сцена может вытянуться под голос).
+const untilEnd = (id: ShotId, offset: number, text: string) => ({ from: SHOTS[id].from + offset, duration: SHOTS[id].duration - offset, text });
 export const CAPTIONS: { from: number; duration: number; text: string }[] = [
-  { from: SHOTS.dashboard.from + 96, duration: 76, text: 'Клиенты, ноды и деньги —\n*на одном экране*' },
-  { from: SHOTS.nodes.from + 56, duration: 94, text: 'Все ноды и их статус —\n*в реальном времени*' },
-  { from: SHOTS.users.from + 14, duration: 94, text: 'Любой клиент —\n*за секунду*' },
-  { from: SHOTS.payments.from + 30, duration: 84, text: 'Оплатил — подписка\n*продлилась сама*' },
+  untilEnd('dashboard', VOICE.dashboard ? 8 : 96, 'Клиенты, ноды и деньги —\n*на одном экране*'),
+  untilEnd('nodes', 56, 'Все ноды и их статус —\n*в реальном времени*'),
+  untilEnd('users', 14, 'Любой клиент —\n*за секунду*'),
+  untilEnd('payments', 30, 'Оплатил — подписка\n*продлилась сама*'),
 ];
 
 // Вспышка перекрывает шов: 5 кадров до и 5 после.
@@ -133,7 +154,7 @@ export const Main: React.FC<{ bgm?: boolean }> = ({ bgm = true }) => {
       const Scene = SCENES[id];
       return (
         <Sequence key={id} from={SHOTS[id].from} durationInFrames={SHOTS[id].duration} name={id}>
-          <Scene />
+          <Scene duration={SHOTS[id].duration} />
         </Sequence>
       );
     })}
@@ -157,11 +178,21 @@ export const Main: React.FC<{ bgm?: boolean }> = ({ bgm = true }) => {
         <Audio src={staticFile(`audio/${s.src}`)} volume={s.volume} />
       </Sequence>
     ))}
+    {VOICE_SPANS.map((v) => (
+      <Sequence key={`voice-${v.id}`} from={v.from} durationInFrames={v.to - v.from + 6} name={`голос ${v.id}`}>
+        <Audio src={staticFile(VOICE[v.id]!.file)} volume={1} />
+      </Sequence>
+    ))}
     {bgm ? (
       <Audio
         src={staticFile('audio/house-vibez.mp3')}
         startFrom={BGM_START}
-        volume={(f) => 0.3 * interpolate(f, [0, 12, TOTAL - 36, TOTAL - 4], [0.6, 1, 1, 0], clampOpt)}
+        volume={(f) => {
+          const fade = interpolate(f, [0, 12, TOTAL - 36, TOTAL - 4], [0.6, 1, 1, 0], clampOpt);
+          // под голосом музыка уходит вниз (за 6 кадров до фразы) и возвращается после неё
+          const duck = VOICE_SPANS.reduce((m, v) => Math.max(m, interpolate(f, [v.from - 6, v.from, v.to, v.to + 10], [0, 1, 1, 0], clampOpt)), 0);
+          return (VOICE_SPANS.length ? 0.32 : 0.3) * fade * (1 - 0.68 * duck);
+        }}
       />
     ) : null}
   </AbsoluteFill>

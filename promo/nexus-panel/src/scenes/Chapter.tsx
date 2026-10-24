@@ -11,7 +11,8 @@ export const CHAPTER_DURATION = 54;
 
 const WORD_EASE = Easing.bezier(0.2, 0.75, 0.3, 1);
 
-export const Chapter: React.FC<{ eyebrow?: string; text?: string }> = ({
+export const Chapter: React.FC<{ eyebrow?: string; text?: string; duration?: number }> = ({
+  duration = CHAPTER_DURATION,
   eyebrow = 'и это ещё не всё',
   // `*слово*` — ключевое; `/` — перенос строки
   text = 'Всё, что нужно / *каждый день*',
@@ -19,7 +20,7 @@ export const Chapter: React.FC<{ eyebrow?: string; text?: string }> = ({
   const frame = useCurrentFrame();
   const words = text.split(' ');
   const line = interpolate(frame, [16, 34], [0, 1], { ...clampOpt, easing: Easing.bezier(0.22, 1, 0.36, 1) });
-  const out = interpolate(frame, [CHAPTER_DURATION - 8, CHAPTER_DURATION], [1, 0], clampOpt);
+  const out = interpolate(frame, [duration - 8, duration], [1, 0], clampOpt);
   let i = 0;
   return (
     <AbsoluteFill style={{ background: `radial-gradient(ellipse 80% 50% at 50% 45%, rgba(168,85,247,0.28), transparent 70%), linear-gradient(160deg, ${C.bg} 0%, ${C.bg2} 55%, #0f0828 100%)`, fontFamily: FONT }}>

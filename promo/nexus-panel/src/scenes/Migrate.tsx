@@ -23,7 +23,7 @@ const TILES = layout.import.tiles;
 const A = 74; // длина части A
 const at = (u: number) => u * A;
 
-const SOURCES = ['Remnawave', 'Marzban', '3x-ui', 'Hiddify'];
+const SOURCES = ['Remnawave', 'Marzban', '3x-ui', '3XUIStore'];
 const ROW_Y = [770, 890, 1010, 1130];
 const DWELL_X = 300;
 const M = { x: 800, y: 950 };

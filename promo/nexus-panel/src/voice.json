@@ -1,0 +1,74 @@
+{
+  "hook": {
+    "file": "voice/hook.mp3",
+    "duration": 3.065,
+    "voice": "nPczCjzI2devNBz1zQrb",
+    "model": "eleven_multilingual_v2"
+  },
+  "cdn": {
+    "file": "voice/cdn.mp3",
+    "duration": 6.177,
+    "voice": "nPczCjzI2devNBz1zQrb",
+    "model": "eleven_multilingual_v2"
+  },
+  "routing": {
+    "file": "voice/routing.mp3",
+    "duration": 6.316,
+    "voice": "nPczCjzI2devNBz1zQrb",
+    "model": "eleven_multilingual_v2"
+  },
+  "stateAi": {
+    "file": "voice/stateAi.mp3",
+    "duration": 6.827,
+    "voice": "nPczCjzI2devNBz1zQrb",
+    "model": "eleven_multilingual_v2"
+  },
+  "updates": {
+    "file": "voice/updates.mp3",
+    "duration": 6.316,
+    "voice": "nPczCjzI2devNBz1zQrb",
+    "model": "eleven_multilingual_v2"
+  },
+  "migrate": {
+    "file": "voice/migrate.mp3",
+    "duration": 7.941,
+    "voice": "nPczCjzI2devNBz1zQrb",
+    "model": "eleven_multilingual_v2"
+  },
+  "chapter": {
+    "file": "voice/chapter.mp3",
+    "duration": 1.997,
+    "voice": "nPczCjzI2devNBz1zQrb",
+    "model": "eleven_multilingual_v2"
+  },
+  "dashboard": {
+    "file": "voice/dashboard.mp3",
+    "duration": 2.879,
+    "voice": "nPczCjzI2devNBz1zQrb",
+    "model": "eleven_multilingual_v2"
+  },
+  "nodes": {
+    "file": "voice/nodes.mp3",
+    "duration": 2.972,
+    "voice": "nPczCjzI2devNBz1zQrb",
+    "model": "eleven_multilingual_v2"
+  },
+  "users": {
+    "file": "voice/users.mp3",
+    "duration": 2.183,
+    "voice": "nPczCjzI2devNBz1zQrb",
+    "model": "eleven_multilingual_v2"
+  },
+  "payments": {
+    "file": "voice/payments.mp3",
+    "duration": 2.879,
+    "voice": "nPczCjzI2devNBz1zQrb",
+    "model": "eleven_multilingual_v2"
+  },
+  "outro": {
+    "file": "voice/outro.mp3",
+    "duration": 5.526,
+    "voice": "nPczCjzI2devNBz1zQrb",
+    "model": "eleven_multilingual_v2"
+  }
+}

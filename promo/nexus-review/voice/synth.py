@@ -15,6 +15,10 @@
     python3 synth.py --voice ID --blocks hook,cdn    # озвучить блоки → out/voice/<id>.mp3 + <id>.json
     python3 synth.py --voice ID --blocks all --yes   # весь сценарий (больше лимита — только с --yes)
 
+    # озвучка шортса: свой файл с блоками, mp3 прямо в public ролика и манифест длительностей для Remotion
+    python3 synth.py --script ../../nexus-panel/voice.md --out ../../nexus-panel/public/voice \
+        --manifest ../../nexus-panel/src/voice.json --voice ID --blocks all
+
 Перед синтезом скрипт считает символы и сверяет с остатком; больше --max-chars (по умолчанию 1500)
 за один запуск без --yes не тратит. eleven_multilingual_v2 стоит 1 кредит за символ.
 """
@@ -35,6 +39,7 @@ SCRIPT = ROOT / "docs/nexus/review-v2.md"
 OUT = Path(__file__).resolve().parents[1] / "out/voice"
 API = "https://api.elevenlabs.io"
 MODEL = os.environ.get("ELEVENLABS_MODEL", "eleven_multilingual_v2")
+MANIFEST: Path | None = None
 SAMPLE_TEXT = ("Белые списки на мобильном интернете: обычный ви-пи-эн просто перестаёт работать. "
                "Нексус прячет ноду за российским си-ди-эн, и трафик проходит.")
 
@@ -60,7 +65,7 @@ def call(method: str, path: str, body: dict | None = None, timeout: int = 180) -
 
 
 def blocks() -> dict[str, str]:
-    text = SCRIPT.read_text(encoding="utf-8")
+    text = SCRIPT.read_text(encoding="utf-8")  # SCRIPT меняет --script
     found = re.findall(r"```voice id=(\w+)\n(.*?)```", text, flags=re.S)
     return {bid: " ".join(body.split()) for bid, body in found}
 
@@ -104,6 +109,11 @@ def tts(voice: str, text: str, name: str) -> Path:
                                                  ensure_ascii=False, indent=1), encoding="utf-8")
     dur = words[-1]["end"] if words else 0
     print(f"  {mp3.relative_to(ROOT)} — {dur:.1f} с, {len(text)} симв.")
+    if MANIFEST:
+        # длительность фразы и где лежит файл — по ним ролик вытягивает сцену под голос
+        man = json.loads(MANIFEST.read_text(encoding="utf-8")) if MANIFEST.exists() else {}
+        man[name] = {"file": f"voice/{mp3.name}", "duration": round(dur, 3), "voice": voice, "model": MODEL}
+        MANIFEST.write_text(json.dumps(man, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return mp3
 
 
@@ -118,7 +128,14 @@ def main() -> None:
     ap.add_argument("--blocks", help="id через запятую или all")
     ap.add_argument("--max-chars", type=int, default=1500)
     ap.add_argument("--yes", action="store_true")
+    ap.add_argument("--script", type=Path, help="файл с блоками voice (по умолчанию сценарий обзора)")
+    ap.add_argument("--out", type=Path, help="куда класть mp3 и тайминги")
+    ap.add_argument("--manifest", type=Path, help="json с длительностями фраз для Remotion")
     a = ap.parse_args()
+    global SCRIPT, OUT, MANIFEST
+    SCRIPT = (a.script or SCRIPT).resolve()
+    OUT = (a.out or OUT).resolve()
+    MANIFEST = a.manifest.resolve() if a.manifest else None
 
     if a.count:
         bl = blocks()

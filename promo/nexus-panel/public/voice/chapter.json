@@ -1,0 +1,37 @@
+{
+ "text": "И всё, что нужно каждый день.",
+ "voice": "nPczCjzI2devNBz1zQrb",
+ "model": "eleven_multilingual_v2",
+ "words": [
+  {
+   "text": "И",
+   "start": 0.0,
+   "end": 0.093
+  },
+  {
+   "text": "всё,",
+   "start": 0.151,
+   "end": 0.499
+  },
+  {
+   "text": "что",
+   "start": 0.522,
+   "end": 0.685
+  },
+  {
+   "text": "нужно",
+   "start": 0.743,
+   "end": 1.022
+  },
+  {
+   "text": "каждый",
+   "start": 1.068,
+   "end": 1.358
+  },
+  {
+   "text": "день.",
+   "start": 1.393,
+   "end": 1.997
+  }
+ ]
+}
