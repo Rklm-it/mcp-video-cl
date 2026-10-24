@@ -1,0 +1,24 @@
+{
+  "name": "nexus-panel-promo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Промо панели Nexus для Reels/Shorts — по скиллу video-shotcraft",
+  "scripts": {
+    "dev": "remotion studio src/index.ts",
+    "render": "remotion render src/index.ts NexusPromo out/nexus-promo.mp4",
+    "render:nobgm": "remotion render src/index.ts NexusPromo out/nexus-promo-nobgm.mp4 --props=props-nobgm.json",
+    "still": "remotion still src/index.ts NexusPromo",
+    "typecheck": "tsc --noEmit",
+    "master": "for v in nexus-promo nexus-promo-nobgm; do ffmpeg -v error -y -i out/$v.mp4 -c:v copy -af loudnorm=I=-14:TP=-1.5:LRA=11 -ar 48000 -c:a aac -b:a 192k out/$v-master.mp4; done"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.484",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "remotion": "4.0.484"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.17",
+    "typescript": "6.0.3"
+  }
+}
