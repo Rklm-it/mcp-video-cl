@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import random
+import time
 import sys
 import uuid
 from datetime import datetime, timedelta
@@ -418,6 +419,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):  # noqa: N802
         path = self.path.split("?")[0]
         if path == "/api/v1/admin/ai/analyze":
+            time.sleep(1.6)  # в записи видно, что модель думает
             return self._send({"ok": True, "text": AI_TEXT, "model": "claude-sonnet", "used_findings": len(FINDINGS),
                                "total_findings": len(FINDINGS), "generated_at": NOW.isoformat(), "summary": MON_SUMMARY})
         if path == "/api/v1/admin/import/analyze":
