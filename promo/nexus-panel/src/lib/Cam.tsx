@@ -58,17 +58,25 @@ export const CamSpace: React.FC<{ cam: Cam; pageW: number; pageH: number; childr
   </AbsoluteFill>
 );
 
-/** Страница-текстура + дочерние элементы в её координатах. */
+/** Страница-текстура + дочерние элементы в её координатах.
+ *  windowed — страница уже кадра (zoom < 2): рисуем её окном со скруглением, рамкой и тенью. */
 export const PageCam: React.FC<{
   src: string;
   pageW: number;
   pageH: number;
   cam: Cam;
   radius?: number;
+  windowed?: boolean;
   children?: React.ReactNode;
-}> = ({ src, pageW, pageH, cam, radius = 0, children }) => (
+}> = ({ src, pageW, pageH, cam, radius = 0, windowed = false, children }) => (
   <CamSpace cam={cam} pageW={pageW} pageH={pageH}>
-    <Img src={staticFile(src)} style={{ position: 'absolute', left: 0, top: 0, width: pageW, height: pageH, borderRadius: radius }} />
+    <Img
+      src={staticFile(src)}
+      style={{
+        position: 'absolute', left: 0, top: 0, width: pageW, height: pageH, borderRadius: windowed ? 14 : radius,
+        boxShadow: windowed ? '0 0 0 1px rgba(192,132,252,0.3), 0 30px 90px rgba(0,0,0,0.65), 0 0 70px rgba(168,85,247,0.22)' : undefined,
+      }}
+    />
     {children}
   </CamSpace>
 );

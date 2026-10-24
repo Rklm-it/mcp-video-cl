@@ -34,7 +34,7 @@ type El = { file: string; w: number; h: number; cx: number; cy: number; scale: n
 // порядок отрисовки = порядок вылета: поздние ложатся сверху
 const ELS: El[] = [
   { file: 'dash-revenue-hires.png', w: L.dashboard.revenue.w, h: L.dashboard.revenue.h, cx: 300, cy: 330, scale: 1.5, rot: -5, dx: -520, dy: -80, cue: 4 },
-  { file: 'dash-online.png', w: L.dashboard.online.w, h: L.dashboard.online.h, cx: 790, cy: 390, scale: 1.35, rot: 4, dx: 520, dy: -60, cue: 7 },
+  { file: L.cdn.rows[0].file, w: L.cdn.rows[0].w, h: L.cdn.rows[0].h, cx: 720, cy: 420, scale: 1.05, rot: 4, dx: 520, dy: -60, cue: 7 },
   { file: 'node1.png', w: L.servers.tiles[0].w, h: L.servers.tiles[0].h, cx: 560, cy: 570, scale: 1.2, rot: -2, dx: -560, dy: -220, cue: 10 },
   { file: L.payments.rows[0].file, w: L.payments.rows[0].w, h: L.payments.rows[0].h, cx: 540, cy: 1440, scale: 1.15, rot: 2.5, dx: 560, dy: 260, cue: 13 },
   { file: L.users.rows[L.users.target].file, w: L.users.rows[0].w, h: L.users.rows[0].h, cx: 520, cy: 1590, scale: 1.1, rot: -1.5, dx: 0, dy: 420, cue: 16 },

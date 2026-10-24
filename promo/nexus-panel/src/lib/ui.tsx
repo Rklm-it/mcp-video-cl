@@ -54,6 +54,53 @@ export const Caption: React.FC<{ text: string; duration: number; y?: number }> =
   );
 };
 
+/**
+ * Заголовок фишки вверху кадра: «ФИШКА 01 / 05», название и под ним выгода
+ * (ключевое слово на розовой плашке). Отдельного субтитра внизу у фишек нет:
+ * верх и низ вместе съедали кадр, а интерфейс панели должен читаться.
+ * Ниже шапки Reels (~200 px); панель видна в полосе ~640…1580.
+ */
+export const FeatureHeader: React.FC<{ n: number; total: number; title: string; sub: string; duration: number }> = ({ n, total, title, sub, duration }) => {
+  const frame = useCurrentFrame();
+  const inT = ramp(frame, 0, 12, EASE.snappy);
+  const subT = ramp(frame, 14, 12, EASE.out);
+  const outT = 1 - ramp(frame, duration - 8, 8, EASE.swift);
+  const bar = ramp(frame, 6, 14, EASE.out);
+  return (
+    <AbsoluteFill style={{ pointerEvents: 'none' }}>
+      <div style={{ position: 'absolute', left: 0, right: 0, top: 0, height: 700, opacity: outT, background: 'linear-gradient(180deg, rgba(11,8,32,0.95) 0%, rgba(11,8,32,0.88) 62%, rgba(11,8,32,0) 100%)' }} />
+      <div style={{ position: 'absolute', left: 70, right: 110, top: 205, opacity: inT * outT, transform: `translateY(${((1 - inT) * -24).toFixed(2)}px)`, fontFamily: FONT }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 18, fontFamily: MONO, fontSize: 34, fontWeight: 700, letterSpacing: '0.14em', color: C.pink, textTransform: 'uppercase' }}>
+          <span>Фишка {String(n).padStart(2, '0')}</span>
+          <span style={{ height: 3, width: 120 * bar, background: `linear-gradient(90deg, ${C.logo}, ${C.cyan})`, borderRadius: 2 }} />
+          <span style={{ color: C.muted }}>/ {String(total).padStart(2, '0')}</span>
+        </div>
+        <div style={{ marginTop: 12, fontSize: 74, fontWeight: 900, lineHeight: 1.02, letterSpacing: '-0.035em', color: C.text, whiteSpace: 'pre-line', textShadow: '0 2px 20px rgba(0,0,0,0.6)' }}>
+          {title}
+        </div>
+      </div>
+      <div
+        style={{
+          position: 'absolute', left: 70, right: 110, top: 460, opacity: subT * outT, transform: `translateY(${((1 - subT) * 18).toFixed(2)}px)`,
+          fontFamily: FONT, fontSize: 46, fontWeight: 800, lineHeight: 1.18, letterSpacing: '-0.02em', color: C.text2,
+        }}
+      >
+        {sub.split('\n').map((line, li) => (
+          <div key={li}>
+            {parse(line).map((p, i) =>
+              p.key ? (
+                <span key={i} style={{ background: C.pink, color: C.ink, padding: '0 12px', borderRadius: 10 }}>{p.text}</span>
+              ) : (
+                <span key={i}>{p.text}</span>
+              ),
+            )}
+          </div>
+        ))}
+      </div>
+    </AbsoluteFill>
+  );
+};
+
 /** Вспышка на жёсткой склейке: 5 кадров до шва и 5 после (FlashCut скилла, сиреневый вместо тёплого). */
 export const FlashCut: React.FC<{ duration?: number }> = ({ duration = 10 }) => {
   const frame = useCurrentFrame();

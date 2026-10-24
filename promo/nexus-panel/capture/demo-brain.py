@@ -220,12 +220,161 @@ def sub_order_preview() -> dict:
     }
 
 
+# ── Премиум-разделы: в демо включено всё ──
+FEATURE_KEYS = ["monitoring_pro", "ai_advisor", "cdn_masking", "import", "bypass", "hosting_api",
+                "node_autoreplace", "vip", "s3_tunnel"]
+FEATURES = {
+    "is_master": False, "premium": True, "premium_until": "2027-10-24T00:00:00",
+    "premium_features": FEATURE_KEYS, "granted": FEATURE_KEYS,
+    "features": {k: True for k in FEATURE_KEYS}, "catalog": [], "synced_at": NOW.isoformat(),
+    "realm": "main", "vip_available": False, "base_url": None,
+}
+
+# ── Центр состояния и ИИ-разбор ──
+def finding(key, code, sev, title, detail, hint, scope, target, actions=()):
+    return {"key": key, "code": code, "severity": sev, "title": title, "detail": detail, "hint": hint,
+            "scope": scope, "target_id": target, "target_name": target, "metrics": {}, "since": 0, "age_h": 3,
+            "actions": [{"kind": "link", "label": a, "href": "/servers"} for a in actions]}
+
+
+FINDINGS = [
+    finding("f1", "node.flapping", "warning", "fi-helsinki-1 дёргается", "4 обрыва за сутки, 22 клиента на ноде",
+            "Переложите клиентов на соседнюю ноду кнопкой «Переложить юзеров» и проверьте канал хостера",
+            "node", "fi-helsinki-1", ["Открыть ноду"]),
+    finding("f2", "hosting.balance", "warning", "Баланс хостинга на 6 дней", "VDSina: хватит до 30.10, на нём 2 ноды",
+            "Пополните баланс, иначе хостер отключит ноды", "fleet", "VDSina", ["Хостинг"]),
+    finding("f3", "disk.forecast", "warning", "Диск панели кончится через 9 дней", "Занято 81%, растёт на 1,7 ГБ в сутки",
+            "Удалите бэкапы старше 30 дней или расширьте диск", "fleet", "brain"),
+    finding("f4", "client.sharing", "warning", "3 клиента раздают подписку", "9–14 разных IP за сутки при лимите 3 устройства",
+            "Откройте «Шаринг подписок» и ограничьте им устройства", "client", "клиенты", ["Шаринг подписок"]),
+]
+MON_NODES = [{
+    "id": n["id"], "name": n["name"], "ip": n["ip_address"], "country": n["country"], "sub_type": n["sub_type"],
+    "is_active": True, "is_online": True, "rf_status": "ok", "clients": n["active_users"], "traffic_bytes": n["total_traffic"],
+    "stats": None, "stability": {"checks": 288, "fails": 4 if i == 2 else 0, "drops": 4 if i == 2 else 0,
+                                 "uptime_pct": 98.6 if i == 2 else 100.0, "latency_p50_ms": 40 + i * 3},
+    "link_quality": None, "status": "warning" if i == 2 else "ok",
+    "findings": [FINDINGS[0]] if i == 2 else [],
+} for i, n in enumerate(NODES)]
+MON_SUMMARY = {
+    "generated_at": NOW.isoformat(), "critical": 0, "warning": len(FINDINGS), "info": 0,
+    "nodes_total": len(NODES), "nodes_online": len(NODES), "nodes_active": len(NODES),
+    "clients": {"no_nodes": 0, "unsynced": 0, "zero_traffic": 2, "expiring": 41, "sharing": 3, "payment_stuck": 0},
+    "state": "warning",
+}
+AI_TEXT = (
+    "1. Сначала fi-helsinki-1: 4 обрыва за сутки, на ней 22 клиента. Переложите их на se-stockholm-1 — "
+    "там запас по нагрузке — и напишите хостеру про канал.\n"
+    "2. Пополните VDSina до 30.10, иначе через 6 дней отключатся 2 ноды.\n"
+    "3. Диск панели: удалите бэкапы старше 30 дней — освободится около 18 ГБ.\n"
+    "4. У 3 клиентов по 9–14 IP за сутки — похоже на раздачу. Ограничьте им устройства до 3.\n"
+    "Остальное в порядке: 9 из 9 нод в сети, платежи проходят."
+)
+
+# ── Маскировка через CDN (адреса выдуманные, домена .demo не существует) ──
+CDN_PROVIDERS = [
+    {"key": "yandex", "title": "Яндекс Облако CDN", "active": True, "ready": True, "missing": [], "hint": "", "notes": [], "dns_validation": False},
+    {"key": "timeweb", "title": "Timeweb CDN", "active": True, "ready": True, "missing": [], "hint": "", "notes": [], "dns_validation": False},
+    {"key": "beeline", "title": "Билайн CDN", "active": True, "ready": True, "missing": [], "hint": "", "notes": [], "dns_validation": False},
+]
+CDN_FRONTS = [
+    {"id": str(uuid.UUID(int=0xC000 + i)), "kind": "node", "provider": prov, "cname": f"{tag}.cdn.nexus.demo",
+     "origin_domain": f"{n['name']}.nexus.demo", "origin_ip": n["ip_address"], "install_args": "", "resource_id": f"cdn-{tag}",
+     "certificate_id": "", "certificate_status": "ISSUED", "server_id": n["id"], "inbound_id": None, "status": "active",
+     "last_error": None, "created_at": "2026-10-01T10:00:00", "blocked_at": None}
+    for i, (prov, tag, n) in enumerate([("yandex", "msk-a7f3", NODES[5]), ("timeweb", "spb-2c9e", NODES[0]),
+                                        ("beeline", "msk-b41d", NODES[1]), ("yandex", "ekb-91aa", NODES[2])])
+]
+CDN_SETTINGS = {
+    "settings": {}, "missing": [], "providers": CDN_PROVIDERS, "provider": "yandex",
+    "beeline_endpoint_keys": [], "beeline_endpoint_defaults": {}, "timeweb_endpoint_keys": [], "timeweb_endpoint_defaults": {},
+}
+
+# ── «Обновить все ноды»: шаг хода задаёт съёмка через /__upgrade?step=N ──
+STATE = {"upgrade_step": 0}
+UPGRADE_PLAN = [  # стадия каждой ноды на шагах 1..4
+    ["trigger", "queued", "queued", "queued", "queued", "queued", "queued", "queued", "queued"],
+    ["done", "online", "updating", "updating", "trigger", "trigger", "queued", "queued", "queued"],
+    ["done", "done", "done", "pushing", "online", "updating", "updating", "trigger", "trigger"],
+    ["done"] * 9,
+]
+
+
+def upgrade_status() -> dict:
+    step = STATE["upgrade_step"]
+    if step == 0:
+        return {"state": "idle", "total": 0, "percent": 0, "nodes": []}
+    stages = UPGRADE_PLAN[step - 1]
+    weight = {"queued": 0, "trigger": 10, "updating": 40, "online": 70, "pushing": 85, "done": 100}
+    nodes = [{
+        "id": n["id"], "server": n["name"], "ip": n["ip_address"], "country": n["country"], "stage": st,
+        "detail": "", "error": "", "warning": "", "log_tail": [], "update_source": "master", "back_online": st in ("online", "pushing", "done"),
+        "push_status": "ok" if st == "done" else None, "resync_users": n["active_users"] if st == "done" else 0,
+        "version_before": "3.104.2", "version": "3.105.11" if st in ("online", "pushing", "done") else None,
+        "triggered_at": None, "finished_at": None,
+    } for n, st in zip(NODES, stages)]
+    done = sum(1 for s in stages if s == "done")
+    return {
+        "state": "done" if step == 4 else "running", "id": "demo", "total": len(NODES), "finished": done,
+        "percent": round(sum(weight[s] for s in stages) / len(stages)), "nodes": nodes,
+        "counts": {s: stages.count(s) for s in weight}, "stage_titles": {
+            "queued": "в очереди", "trigger": "запуск", "updating": "обновляется", "online": "снова в сети",
+            "pushing": "применяет сеть", "done": "готово", "failed": "ошибка", "timeout": "не дождались"},
+    }
+
+
+def node_versions() -> dict:
+    return {"nodes": [{"server_id": n["id"], "server": n["name"], "ip": n["ip_address"], "is_online": True, "country": n["country"],
+                       "xray_version": "26.7.11", "xray_ok": True, "cell_reachable": True,
+                       "last_traffic_report_at": NOW.isoformat(), "traffic_stale": False} for n in NODES]}
+
+
+# ── Перенос с другой панели (ответ разбора бэкапа) ──
+IMPORT_ANALYZE = {
+    "token": "demo", "panel": "remnawave", "panel_title": "Remnawave", "container": "pg_dump", "container_title": "дамп PostgreSQL",
+    "total": 2318, "active": 1904, "expired": 414, "with_telegram": 2207, "with_uuid": 2318, "conflicts": {}, "warnings": [],
+    "preview": [{"username": u["username"], "vless_uuid": u["vless_uuid"], "telegram_id": u["telegram_id"], "email": None,
+                 "expire_at": u["expire_at"], "traffic_limit": u["traffic_limit"], "traffic_used": u["traffic_used"],
+                 "ip_limit": 3, "is_active": True, "description": None} for u in USERS[10:18]],
+}
+
+# ── Маршрутизация европейской ноды: банки и Госуслуги — через российскую, остальное как обычно ──
+RU_SERVICES = ["domain:gosuslugi.ru", "domain:sberbank.ru", "domain:online.sberbank.ru", "domain:tbank.ru",
+               "domain:vtb.ru", "domain:alfabank.ru", "domain:nalog.gov.ru", "domain:ozon.ru", "domain:wildberries.ru"]
+NODES[0]["routing_rules"] = [
+    {"type": "field", "outboundTag": "relay-ru", "domain": RU_SERVICES},
+    {"type": "field", "outboundTag": "direct", "domain": ["domain:t.me", "domain:telegram.org", "domain:telegram.me", "domain:telesco.pe"]},
+    {"type": "field", "outboundTag": "direct", "domain": ["domain:youtube.com", "domain:googlevideo.com", "domain:ytimg.com"]},
+    {"type": "field", "outboundTag": "direct", "domain": ["domain:openai.com", "domain:chatgpt.com", "domain:claude.ai"]},
+    {"type": "field", "outboundTag": "blocked", "domain": ["geosite:category-ads"]},
+]
+OUTBOUNDS = [{
+    "id": str(uuid.UUID(int=0xD001)), "server_id": NODES[0]["id"], "tag": "relay-ru", "protocol": "vless",
+    "target_address": NODES[5]["ip_address"], "target_port": 443, "config": None, "is_enabled": True,
+    "relay_mode": "relay", "listen_port": None, "target_server_id": NODES[5]["id"], "target_server_name": NODES[5]["name"],
+}]
+
 ROUTES = {
+    "/api/v1/admin/features": lambda q: FEATURES,
+    "/api/v1/admin/monitoring/overview": lambda q: {"summary": MON_SUMMARY, "nodes": MON_NODES, "findings": FINDINGS, "muted": [], "settings": {}},
+    "/api/v1/admin/ai/settings": lambda q: {"enabled": True, "base_url": "https://api.example/v1", "api_key": "✓ задано", "model": "claude-sonnet",
+                                             "auto_analyze": True, "auto_cooldown_min": 60, "max_findings": 30, "support_mode": "auto",
+                                             "support_history_turns": 6, "timeout_s": 60, "temperature": 0.2, "has_key": True, "configured": True},
+    "/api/v1/admin/cdn/settings": lambda q: CDN_SETTINGS,
+    "/api/v1/admin/cdn/fronts": lambda q: {"fronts": CDN_FRONTS},
+    "/api/v1/admin/nodes/versions": lambda q: node_versions(),
+    "/api/v1/admin/brain/self-update/status": lambda q: {"state": "idle"},
+    "/api/v1/admin/routing/custom-services": lambda q: {"services": [], "groups": []},
+    "/api/v1/admin/nodes/agent-status": lambda q: {
+        "nodes": [{"server": n["name"], "ip": n["ip_address"], "status": "up_to_date", "version": "3.105.11",
+                   "main_mtime_iso": NOW.isoformat(), "missing_features": [], "note": "", "reachable": True} for n in NODES],
+        "summary": {"total": len(NODES), "up_to_date": len(NODES), "outdated": 0, "unreachable": 0}, "expected_features": []},
+    f"/api/v1/servers/{NODES[0]['id']}/outbounds": lambda q: OUTBOUNDS,
     "/api/v1/admin/sub-order": lambda q: sub_order(),
     "/api/v1/admin/sub-order/preview": lambda q: sub_order_preview(),
     "/api/v1/admin/resync": lambda q: {"enabled": True, "interval_h": 6, "remove_extra": True, "last_run": None},
     "/api/v1/admin/resync/progress": lambda q: {"state": "idle"},
-    "/api/v1/admin/nodes/upgrade-all/status": lambda q: {"state": "idle"},
+    "/api/v1/admin/nodes/upgrade-all/status": lambda q: upgrade_status(),
     "/api/v1/admin/nodes/geosite/categories": lambda q: {"categories": ["category-ru", "youtube"]},
 
     "/api/v1/servers": lambda q: NODES,
@@ -254,6 +403,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):  # noqa: N802
         path, _, query = self.path.partition("?")
+        if path == "/__upgrade":  # шаг хода обновления нод для съёмки
+            STATE["upgrade_step"] = int(query.split("=")[-1] or 0)
+            return self._send(upgrade_status())
         route = ROUTES.get(path)
         if route is not None:
             return self._send(route(query))
@@ -264,6 +416,12 @@ class Handler(BaseHTTPRequestHandler):
         return self._send([])
 
     def do_POST(self):  # noqa: N802
+        path = self.path.split("?")[0]
+        if path == "/api/v1/admin/ai/analyze":
+            return self._send({"ok": True, "text": AI_TEXT, "model": "claude-sonnet", "used_findings": len(FINDINGS),
+                               "total_findings": len(FINDINGS), "generated_at": NOW.isoformat(), "summary": MON_SUMMARY})
+        if path == "/api/v1/admin/import/analyze":
+            return self._send(IMPORT_ANALYZE)
         self._send({"ok": True})
 
     do_PUT = do_PATCH = do_DELETE = do_POST

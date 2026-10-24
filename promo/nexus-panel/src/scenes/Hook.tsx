@@ -14,7 +14,7 @@ export const HOOK_DURATION = 72;
 
 export const HOOK_DEFAULTS = {
   eyebrow: 'NEXUS · панель для VPN',
-  lines: ['Весь свой', 'VPN-сервис', 'в одной панели'],
+  lines: ['5 фишек,', 'которых нет', 'в других VPN-панелях'],
 };
 
 export const Hook: React.FC<Partial<typeof HOOK_DEFAULTS>> = (props) => {
@@ -58,14 +58,14 @@ export const Hook: React.FC<Partial<typeof HOOK_DEFAULTS>> = (props) => {
         <div style={{ fontSize: 108, fontWeight: 900, lineHeight: 1.0, letterSpacing: '-0.035em', textTransform: 'uppercase' }}>{lines[0]}</div>
         <div
           style={{
-            fontSize: 128, fontWeight: 900, lineHeight: 1.04, letterSpacing: '-0.045em', textTransform: 'uppercase', margin: '8px 0 12px', whiteSpace: 'nowrap',
+            fontSize: 118, fontWeight: 900, lineHeight: 1.04, letterSpacing: '-0.045em', textTransform: 'uppercase', margin: '8px 0 12px', whiteSpace: 'nowrap',
             background: `linear-gradient(90deg, ${C.logo} 0%, ${C.pink} 55%, ${C.cyan} 120%)`, WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent',
             filter: 'drop-shadow(0 0 30px rgba(232,121,249,0.35))',
           }}
         >
           {lines[1]}
         </div>
-        <div style={{ fontSize: 92, fontWeight: 900, lineHeight: 1.0, letterSpacing: '-0.035em', textTransform: 'uppercase' }}>{lines[2]}</div>
+        <div style={{ fontSize: 86, fontWeight: 900, lineHeight: 1.02, letterSpacing: '-0.035em', textTransform: 'uppercase' }}>{lines[2]}</div>
       </div>
       <Grain opacity={0.06} blend="soft-light" />
     </AbsoluteFill>
